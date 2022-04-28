@@ -97,7 +97,7 @@ async function mainLoop(ns) {
 	await checkOnDaedalusStatus(ns, player, stocksValue);
 	await checkIfBnIsComplete(ns, player);
 	await checkOnRunningScripts(ns, player);
-	await maybeDoCasino(ns, player);
+	// await maybeDoCasino(ns, player);
 	await maybeInstallAugmentations(ns, player);
 }
 
