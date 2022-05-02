@@ -44,6 +44,9 @@ async function mainLoop () {
         fail = true
         break
       }
+      if (canceled) {
+        break
+      }
       // log(ns, 'Waiting')
     }
     if (fail) {
