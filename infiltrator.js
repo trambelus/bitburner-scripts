@@ -511,15 +511,18 @@ class InfiltrationService {
       'hardworking',
       'patient',
       'dynamic',
-      'loyal'
+      'loyal',
+      'based'
     ]
     while (activeElement !== undefined) {
       logConsole('Game active: Bribe game')
+      // use hint from SoA augment, if available
+      const upArrowIsBest = globalThis.getComputedStyle(activeElement.nextSibling).color === globalThis.getComputedStyle(activeElement).color
       const currentWord = activeElement.nextSibling.nextSibling.innerText
       if (positive.includes(currentWord)) {
         await self.sendKeyString(' ')
       } else if (lastWord !== currentWord) {
-        await self.sendKeyString('w')
+        await self.sendKeyString(upArrowIsBest ? 'w' : 's')
         lastWord = currentWord
       }
       activeElement = queryFilter('h4', activeText)
