@@ -9,7 +9,7 @@ export async function editPlayerData (callback) {
   const saveData = JSON.parse(b64decode(rawData))
   const playerData = JSON.parse(saveData.data.PlayerSave)
   // muck about with it
-  callback(playerData)
+  callback(playerData.data)
   // bundle it up and save
   saveData.data.PlayerSave = JSON.stringify(playerData)
   const newRawSave = b64encode(JSON.stringify(saveData))
@@ -73,8 +73,8 @@ export async function main (ns) {
   const skipAmount = parseTime(ns.args.join(' '))
   ns.print(`Skipping ${skipAmount} ms...`)
   await editPlayerData(playerData => {
-    playerData.data.lastSave -= skipAmount
-    playerData.data.lastUpdate -= skipAmount
+    playerData.lastSave -= skipAmount
+    playerData.lastUpdate -= skipAmount
   })
   // delay to avoid reloading/exiting before save edit is complete
   setTimeout(() => { getWindow().location.reload() }, reloadDelay)
