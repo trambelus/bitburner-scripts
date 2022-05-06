@@ -21,7 +21,7 @@ export async function main (ns) {
 async function mainLoop () {
   let canceled = false
   const cancelHook = function () {
-    const btn = [...doc.getElementsByTagName('button')].find(e => e.innerText === 'Cancel')
+    const btn = [...doc.getElementsByTagName('button')].find(e => e.innerText.includes('Cancel Infiltration'))
     if (!btn) return
     const fn = btn.onclick
     if (fn._hooked) return
