@@ -30,7 +30,7 @@ const _doc = _win.document
 
 const argsSchema = [
   ['stop', false], // set to stop the old service and not start a new one
-  ['timeFactor', 1], // interval multiplier to apply during infiltrations (set to 1 to disable)
+  ['timeFactor', 0.2], // interval multiplier to apply during infiltrations (set to 1 to disable)
   ['keyDelay', 1] // delay in ms between keystrokes
 ]
 
@@ -53,8 +53,8 @@ function sleep (time) {
 }
 
 // shorthand function for finding an element by querySelector and filtering by text
-export function queryFilter (query, filter) {
-  return [..._doc.querySelectorAll(query)].find(e => e.innerText.trim().match(filter))
+export function queryFilter (query, filter, parent = _doc) {
+  return [...parent.querySelectorAll(query)].find(e => e.innerText.trim().match(filter))
 }
 
 function addCss () {
@@ -116,8 +116,8 @@ function setTimeFactor (factor = 1) {
 }
 
 function autoSetTimeFactor () {
-  const lvlReg = /^Level:\s+\d+\s*\/\s*\d+$/
-  const levelElement = queryFilter('p', lvlReg)
+  const lvlReg = /^Level:?\s+\d+\s*\/\s*\d+$/
+  const levelElement = queryFilter('h5', lvlReg)
 
   if (levelElement === undefined) {
     if (setTimeFactor(1)) {
@@ -295,23 +295,10 @@ function getPathSequential (sizeX, sizeY, points, start = [0, 0]) {
   return ret
 }
 
-function getGridX (node) {
-  let x = 0
-  while (node.previousSibling !== null) {
-    node = node.previousSibling
-    x += 1
-  }
-  return x
-}
-
-function getGridY (node) {
-  let y = 0
-  node = node.parentNode.parentNode
-  while (node.previousSibling?.tagName === 'DIV') {
-    node = node.previousSibling
-    y += 1
-  }
-  return y
+function getNodeIndex (node) {
+  let idx
+  for (idx = 0; node?.previousSibling !== null; node = node.previousSibling, idx++) { /* ._. */ }
+  return idx
 }
 
 function pressStart () {
@@ -368,13 +355,13 @@ class InfiltrationService {
     if (!targetElement) return
     logConsole('Game active: Cyberpunk2077 game')
     const targetValues = targetElement.innerText.split('Targets: ')[1].trim().split(/\s+/)
+    const grid = queryFilter('p', /^[0-9a-f]{2}$/, targetElement.parentNode).parentNode
+    const size = ~~(grid.childElementCount ** 0.5)
     const routePoints = []
-    let size
     // get coords of each target
     for (const target of targetValues) {
-      const node = [...targetElement.parentElement.querySelectorAll('div p span')].filter(el => el.innerText.trim() === target)[0]
-      size = node.parentNode.childElementCount
-      routePoints.push([getGridX(node), getGridY(node)])
+      const node = [...grid.children].filter(el => el.innerText.trim() === target)[0]
+      routePoints.push([getNodeIndex(node) % size, ~~(getNodeIndex(node) / size)])
     }
     const pathStr = getPathSequential(size, size, routePoints).join(' ') + ' '
     logConsole(`Sending path: '${pathStr}'`)
@@ -389,15 +376,25 @@ class InfiltrationService {
     const memoryPhaseText = 'Remember all the mines!'
     const markPhaseText = 'Mark all the mines!'
 
-    if (!queryFilter('h4', memoryPhaseText)) return
+    const header = queryFilter('h4', memoryPhaseText)
+    if (!header) return
     logConsole('Game active: Minesweeper game')
-    const gridElements = [..._doc.querySelectorAll('span')].filter(el => el.innerText.trim().match(/^\[[X.\s?]\]$/))
+    // const gridElements = [..._doc.querySelectorAll('span')].filter(el => el.innerText.trim().match(/^\[[X.\s?]\]$/))
+    const grid = header.nextSibling
+    const gridElements = [...grid.children]
     if (gridElements.length === 0) return
     // get size
-    const sizeX = gridElements[0].parentNode.childElementCount
-    const sizeY = gridElements[0].parentNode.parentNode.parentNode.childElementCount
+    const sizeX = ~~(gridElements.length ** 0.5)
+    const sizeY = gridElements.length / sizeX // grid may have an extra row, so account for that
+    if (sizeY !== ~~sizeY) {
+      logConsole('WARNING: non-rectangular grid???')
+      return
+    }
     // get coordinates for each mine
-    const mineCoords = gridElements.filter(el => el.innerText.trim().match(/^\[\?\]$/)).map(el => [getGridX(el), getGridY(el)])
+    const mineCoords = gridElements.filter(el => el.firstChild?.getAttribute('data-testid') === 'ReportIcon').map(el => {
+      el.style.borderColor = 'red' // turn the border red for no real reason, while we're here
+      return [getNodeIndex(el) % sizeX, ~~(getNodeIndex(el) / sizeX)]
+    })
     // wait for mark phase
     while (queryFilter('h4', memoryPhaseText)) {
       await sleep(50)
@@ -437,6 +434,7 @@ class InfiltrationService {
     logConsole('Game active: Bracket game')
     const bracketText = activeElement.nextSibling.innerText
     const closeText = bracketText.split('').reverse().join('')
+      .replace('|', '') // just in case
       .replaceAll('<', '>')
       .replaceAll('(', ')')
       .replaceAll('[', ']')
@@ -479,7 +477,7 @@ class InfiltrationService {
     let activeElement = queryFilter('h4', activeText)
     if (activeElement === undefined) return
     logConsole('Game active: Backward game')
-    const text = activeElement.parentNode.nextSibling.children[0].innerText
+    const text = activeElement.nextSibling.innerText
     await self.sendKeyString(text.toLowerCase())
     while (activeElement !== undefined) {
       activeElement = queryFilter('h4', activeText)
@@ -490,7 +488,7 @@ class InfiltrationService {
   async bribeGame () {
     const self = this
     if (!self.automationEnabled) return
-    const activeText = 'Say something nice about the guard.'
+    const activeText = 'Say something nice about the guard'
     let activeElement = queryFilter('h4', activeText)
     let lastWord
     const positive = [
@@ -517,7 +515,7 @@ class InfiltrationService {
     ]
     while (activeElement !== undefined) {
       logConsole('Game active: Bribe game')
-      const currentWord = activeElement.parentNode.nextSibling.children[1].innerText
+      const currentWord = activeElement.nextSibling.nextSibling.innerText
       if (positive.includes(currentWord)) {
         await self.sendKeyString(' ')
       } else if (lastWord !== currentWord) {
@@ -536,31 +534,28 @@ class InfiltrationService {
     const activeElement = queryFilter('h4', activeText)
     if (activeElement === undefined) return
     logConsole('Game active: Wire Cutting game')
+
     // extract hints
-    const hints = [...activeElement.parentNode.children].filter(el => el.tagName === 'P').map(el => el.innerText).join('')
+    const hints = [...activeElement.parentNode.querySelectorAll('p')].map(el => el.innerText).join('')
     const colorHints = hints.match(/(?<=colored ).+?(?=\.)/g)
       .map(s => { return { white: 'white', blue: 'blue', red: 'red', yellow: 'rgb(255, 193, 7)' }[s] })
     const numberHints = hints.match(/(?<=number ).+?(?=\.)/g)
     const solution = new Set()
     numberHints.forEach(n => { solution.add(n) })
-    // find the first div containing wire spans
-    let wireDiv = activeElement
-    while (wireDiv.tagName !== 'DIV') {
-      wireDiv = wireDiv.nextSibling
-    }
-    // check first row of wire spans
-    const wireCount = wireDiv.firstElementChild.childElementCount
-    for (let i = 0; i < wireCount; i++) {
-      if (colorHints.includes(wireDiv.firstElementChild.children[i].style.color)) {
-        solution.add((i + 1).toString())
+
+    // find the first div containing wire elements
+    const wireDiv = queryFilter('p', /^\|[-#./█|]\|$/).parentNode
+
+    const wireCount = [...wireDiv.children].filter(el => el.innerText.match(/^\d$/)).length
+    // get just the first two rows
+    const wireNodes = [...wireDiv.children].slice(wireCount, wireCount * 3)
+    // loop through the rows and check their colors
+    let i = 0
+    for (const wire of wireNodes) {
+      if (colorHints.includes(wire.style.color)) {
+        solution.add(((i % wireCount) + 1).toString())
       }
-    }
-    // repeat for second row
-    wireDiv = wireDiv.nextSibling
-    for (let i = 0; i < wireCount; i++) {
-      if (colorHints.includes(wireDiv.firstElementChild.children[i].style.color)) {
-        solution.add((i + 1).toString())
-      }
+      i++
     }
     // send solution string
     const solutionStr = Array.from(solution).join('')
@@ -883,7 +878,7 @@ export async function main (ns) {
   const service = new InfiltrationService(ns, locations)
   const intervalId = service.start()
   await registerService(ns, serviceName, intervalId, options)
-  log(ns, `Started infiltration service: tF=${infiltrationTimeFactor}`, false, 'success')
+  log(ns, `Started infiltration service: tF = ${infiltrationTimeFactor}`, false, 'success')
   log(ns, `Infiltration service is running with interval ID ${intervalId}`, true)
   log(ns, 'Script will now exit.')
 }
