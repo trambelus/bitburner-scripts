@@ -2,7 +2,7 @@
 
 const reloadDelay = 1500
 
-async function editPlayerData (callback) {
+export async function editPlayerData (callback) {
   // get save data
   const db = await getDB('bitburnerSave', 1)
   const rawData = await getIdbData(db, 'savestring', 'save')
@@ -49,11 +49,11 @@ function b64encode (data) {
   return btoa(unescape(encodeURIComponent(data)))
 }
 
-function getWindow () {
+export function getWindow () {
   return [].map.constructor('return this')()
 }
 
-function parseTime (timeStr) {
+export function parseTime (timeStr) {
   let ret = 0
   const years = timeStr.match(/(\d+)\s*y/)
   const days = timeStr.match(/(\d+)\s*d/)
