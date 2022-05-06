@@ -276,13 +276,14 @@ async function checkOnRunningScripts(ns, player) {
 
 	// Default work for faction args we think are ideal for speed-running BNs
 	const workForFactionsArgs = [
-		"--fast-crimes-only", // Essentially means we do mug until we can do homicide, then stick to homicide
+		// "--fast-crimes-only", // Essentially means we do mug until we can do homicide, then stick to homicide
+		"--no-focus",
 		"--get-invited-to-every-faction" // Join factions even we have all their augs. Good for having NeuroFlux providers
 	];
 	if (!options['enable-bladeburner']) workForFactionsArgs.push("--no-bladeburner-check")
 	// The following args are ideal when running 'work-for-factions.js' to rush unlocking gangs (earn karma)
 	const rushGangsArgs = workForFactionsArgs.concat(...[ // Everything above, plus...
-		"--crime-focus", // Start off by trying to work for each of the crime factions (generally have combat reqs)
+		// "--crime-focus", // Start off by trying to work for each of the crime factions (generally have combat reqs)
 		"--training-stat-per-multi-threshold", 200, // Be willing to spend more time grinding for stats rather than skipping a faction
 		"--prioritize-invites"]); // Don't actually start working for factions until we've earned as many invites as we think we can
 	// If gangs are unlocked, micro-manage how 'work-for-factions.js' is running by killing off unwanted instances

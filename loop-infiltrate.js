@@ -1,6 +1,8 @@
 import { log } from './helpers'
 
-const doc = eval('document')
+const win = [].map.constructor('return this')()
+const doc = win.document
+
 let _ns
 
 /** @param {import(".").NS} ns */
@@ -14,18 +16,19 @@ export async function main (ns) {
     log(_ns, err.toString())
     throw err
   }
-} 
+}
 
 async function mainLoop () {
   let canceled = false
   const cancelHook = function () {
-  	const btn = [...doc.getElementsByTagName('button')].find(e => e.innerText === 'Cancel')
+    const btn = [...doc.getElementsByTagName('button')].find(e => e.innerText === 'Cancel')
     if (!btn) return
     const fn = btn.onclick
-	  if (fn._hooked) return
+    if (fn._hooked) return
     btn.onclick = () => { canceled = true; fn() }
     btn.onclick._hooked = true
   }
+  /* eslint-disable-next-line no-unmodified-loop-condition */
   while (!canceled) {
     let fail = false
     if (!ensureAevum()) {
@@ -64,7 +67,7 @@ function queryFilter (query, filter) {
 }
 
 function ensureAevum () {
-  if (_ns.getPlayer().city !== 'Aevum' &&  !_ns.travelToCity('Aevum')) {
+  if (_ns.getPlayer().city !== 'Aevum' && !_ns.travelToCity('Aevum')) {
     log(_ns, 'ERROR: Sorry, you need at least $200k to travel.')
     return false
   }
