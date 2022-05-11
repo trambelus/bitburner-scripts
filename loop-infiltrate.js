@@ -1,7 +1,8 @@
 import { log } from './helpers'
 
 const win = [].map.constructor('return this')()
-const doc = win.document
+/* eslint-disable-next-line dot-notation */
+const doc = win['document']
 
 let _ns
 
@@ -99,9 +100,5 @@ function clickTrusted (node) {
 
 function infiltrationComplete () {
   const ret = queryFilter('h4', 'Infiltration successful!') !== undefined
-<<<<<<< HEAD
-  console.log(`infiltrationComplete() returning ${ret}`)
-=======
->>>>>>> infiltration-revamp
   return ret
 }
