@@ -5,10 +5,11 @@ let _ns
 const doc = [].map.constructor('return this.document')()
 
 const argsSchema = [
-  ['str', Infinity], // strength score target
-  ['def', Infinity], // defense score target
-  ['dex', Infinity], // dexterity score target
-  ['agi', Infinity], // agility score target
+  ['str', 0], // strength score target
+  ['def', 0], // defense score target
+  ['dex', 0], // dexterity score target
+  ['agi', 0], // agility score target
+  ['stats', 0], // shorthand to override all of the above if higher than them
   ['period', '10s'], // time spent on each before cycling to the next
   ['gym', 'Powerhouse Gym'] // gym to train at. not sure why you would ever change this.
 ]
@@ -136,5 +137,9 @@ export async function main (ns) {
   _ns.disableLog('ALL')
   const options = ns.flags(argsSchema)
   const period = parseTime(options.period)
+  if (options.stats > options.str) options.str = options.stats
+  if (options.stats > options.def) options.def = options.stats
+  if (options.stats > options.dex) options.dex = options.stats
+  if (options.stats > options.agi) options.agi = options.stats
   await doGainz(options.str, options.def, options.dex, options.agi, period, options.gym)
 }
