@@ -248,11 +248,12 @@ export async function main(ns) {
         { name: "sleeve.js", tail: openTailWindows, shouldRun: () => 10 in dictSourceFiles }, // Script to create manage our sleeves for us
         { name: "gangs.js", tail: openTailWindows, shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
         {
-            name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
+            name: "work-for-factions.js", args: ['--no-focus'], // Singularity script to manage how we use our "focus" work.
             shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4])) // Higher SF4 levels result in lower RAM requirements
         },
         { name: "bladeburner.js", tail: openTailWindows, shouldRun: () => 7 in dictSourceFiles && playerStats.bitNodeN == 6 || playerStats.bitNodeN == 7 }, // Script to create manage bladeburner for us
         { name: "infiltrator.js", tail: false }, // Service to automate infiltrations
+        { name: "corporation.js", tail: false } // todo: get this to run only if a corp is up
     ];
     asynchronousHelpers.forEach(helper => helper.name = getFilePath(helper.name));
     // Add any additional scripts to be run provided by --run-script arguments
@@ -337,7 +338,7 @@ async function kickstartHackXp(ns) {
                 log(ns, `INFO: Studying for ${studyTime} seconds to kickstart hack XP and speed up initial cycle times. (set --initial-study-time 0 to disable this step.)`);
                 const money = ns.getServerMoneyAvailable("home")
                 if (money >= 200000) // If we can afford to travel, we're probably far enough along that it's worthwhile going to Volhaven where ZB university is.
-                    await getNsDataThroughFile(ns, `ns.travelToCity("Volhaven")`, '/Temp/travel-to-city.txt');
+                    await getNsDataThroughFile(ns, `ns.travelToCity(ns.args[0])`, '/Temp/travel-to-city.txt', ['Volhaven']);
                 await updatePlayerStats(); // Update player stats to be certain of our new location.
                 const university = playerStats.city == "Sector-12" ? "Rothman University" : playerStats.city == "Aevum" ? "Summit University" : playerStats.city == "Volhaven" ? "ZB Institute of Technology" : null;
                 if (!university)
