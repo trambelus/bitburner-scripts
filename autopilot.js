@@ -26,7 +26,8 @@ const argsSchema = [ // The set of all command line arguments
   ['disable-wait-for-4s', false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
   ['disable-rush-gangs', false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
   ['on-completion-script', null], // Spawn this script when we defeat the bitnode
-  ['on-completion-script-args', []] // Optional args to pass to the script when we defeat the bitnode
+  ['on-completion-script-args', []], // Optional args to pass to the script when we defeat the bitnode
+  ['no-focus', false] // Don't launch any scripts that will steal focus from the user
 ]
 export function autocomplete (data, args) {
   data.flags(argsSchema)
@@ -333,11 +334,14 @@ async function checkOnRunningScripts (ns, player) {
     '--crime-focus', // Start off by trying to work for each of the crime factions (generally have combat reqs)
     '--training-stat-per-multi-threshold', 200, // Be willing to spend more time grinding for stats rather than skipping a faction
     '--prioritize-invites']) // Don't actually start working for factions until we've earned as many invites as we think we can
+  if (options['no-focus']) {
+    workForFactionsArgs.push('--no-focus')
+  }
   // If gangs are unlocked, micro-manage how 'work-for-factions.js' is running by killing off unwanted instances
   if (2 in unlockedSFs) {
     // Check if we've joined a gang yet. (Never have to check again once we know we're in one)
     if (!playerInGang) playerInGang = await getNsDataThroughFile(ns, 'ns.gang.inGang()', '/Temp/gang-inGang.txt')
-    rushGang = !options['disable-rush-gangs'] && !playerInGang
+    rushGang = !options['disable-rush-gangs'] && !playerInGang && !options['no-focus']
     // Detect if a 'work-for-factions.js' instance is running with args that don't match our goal. We aren't too picky,
     // (so the player can run with custom args), but should have --crime-focus if (and only if) we're still working towards a gang.
     const wrongWork = findScript('work-for-factions.js', !rushGang
@@ -348,7 +352,7 @@ async function checkOnRunningScripts (ns, player) {
 
     // Start gangs immediately (even though daemon would eventually start it) since we want any income they provide right away after an ascend
     // TODO: Consider monitoring gangs territory progress and increasing their budget / decreasing their reserve to help kick-start them
-    if (playerInGang && !findScript('gangs.js')) { launchScriptHelper(ns, 'gangs.js', ['--money-focus']) }
+    if (playerInGang && !findScript('gangs.js')) { launchScriptHelper(ns, 'gangs.js') }
   }
 
   // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
