@@ -6,11 +6,25 @@ const doc = win['document']
 
 let _ns
 
+const argsSchema = [
+  ['no-auto-sell', false] // disable automatically selling the intel at the end of the loop
+]
+let noAutoSell = false
+const failLimit = 3
+
+export function autocomplete (data) {
+  data.flags(argsSchema)
+  return []
+}
+
 /** @param {import(".").NS} ns */
 export async function main (ns) {
   _ns = ns
   _ns.disableLog('ALL')
   _ns.tail()
+  const options = _ns.flags(argsSchema)
+  ns.print(`Running with options: ${JSON.stringify(options, (k, v) => k !== '_' ? v : undefined, 2)}`)
+  noAutoSell = options['no-auto-sell']
   try {
     await mainLoop()
   } catch (err) {
@@ -21,6 +35,7 @@ export async function main (ns) {
 
 async function mainLoop () {
   let canceled = false
+  let consecutiveFails = 0
   const cancelHook = function () {
     const btn = [...doc.getElementsByTagName('button')].find(e => e.innerText.includes('Cancel Infiltration'))
     if (!btn) return
@@ -32,6 +47,10 @@ async function mainLoop () {
   /* eslint-disable-next-line no-unmodified-loop-condition */
   while (!canceled) {
     let fail = false
+    if (consecutiveFails > failLimit) {
+      log(_ns, `ERROR: More than ${failLimit} consecutive failures detected. Exiting loop.`)
+      break
+    }
     if (!ensureAevum()) {
       log(_ns, 'ERROR: Could not find ECorp in Aevum.')
       break
@@ -55,13 +74,22 @@ async function mainLoop () {
     }
     if (fail) {
       console.log('### INFILTRATION FAILED ###')
+      consecutiveFails++
       continue
     }
     console.log('---INFILTRATION SUCCESS---')
-    const sellBtn = queryFilter('button', 'Sell')
-    log(_ns, `Selling for ${sellBtn?.innerText.split('\n').at(-1)}`)
-
-    sellBtn?.click()
+    consecutiveFails = 0
+    if (!noAutoSell) {
+      // automatically click sell button
+      const sellBtn = queryFilter('button', 'Sell')
+      log(_ns, `Selling for ${sellBtn?.innerText.split('\n').at(-1)}`)
+      sellBtn?.click()
+    } else {
+      // wait for the user to make a choice on selling intel
+      while (queryFilter('h4', 'Infiltration successful!') !== undefined) {
+        await _ns.asleep(1000)
+      }
+    }
     await _ns.asleep(1000)
   }
 }

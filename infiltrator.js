@@ -395,6 +395,15 @@ class InfiltrationService {
       el.style.borderColor = 'red' // turn the border red for no real reason, while we're here
       return [getNodeIndex(el) % sizeX, ~~(getNodeIndex(el) / sizeX)]
     })
+    // trace code to print the known coords
+    console.log('Mine coords: ' + JSON.stringify(mineCoords))
+    for (let y = 0; y < sizeY; y++) {
+      const row = []
+      for (let x = 0; x < sizeX; x++) {
+        row.push(mineCoords.some(coord => coord[0] === x && coord[1] === y) ? '[X]' : '[ ]')
+      }
+      console.log(row.join(' '))
+    }
     // wait for mark phase
     while (queryFilter('h4', memoryPhaseText)) {
       await sleep(50)
