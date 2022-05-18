@@ -1,22 +1,22 @@
+/* eslint-disable no-unused-expressions, no-sequences, multiline-ternary, brace-style, eqeqeq,
+  no-mixed-operators, no-return-assign, no-cond-assign, no-unreachable, no-unmodified-loop-condition */
 import {
   log, getConfiguration, instanceCount, formatNumberShort, formatMoney,
   getNsDataThroughFile, getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue
 } from './helpers.js'
 
-/* eslint-disable no-irregular-whitespace */
-
 // PLAYER CONFIGURATION CONSTANTS
-// This also acts as a list of default "easy" factions to list and compare, in addition to any other invites you may have
-const preferredFactionOrder = [ // Prefer to join factions in (ish) order of most expensive to least expensive
-  'BitRunners', 'The Black Hand', 'NiteSec', 'CyberSec', 'Netburners', // Hack Based
-  'Tian Di Hui', 'Sector-12', 'Chongqing', 'New Tokyo', 'Ishima', 'Aevum', 'Volhaven', // Location Based
-  'Slum Snakes', 'Tetrads' // Crime Based
+// This acts as a list of default "easy" factions to always show even if the user has --hide-locked-factions
+const easyAccessFactions = [
+  'Tian Di Hui', 'Sector-12', 'Chongqing', 'New Tokyo', 'Ishima', 'Aevum', 'Volhaven', // Location-Based
+  'BitRunners', 'CyberSec', 'NiteSec', /* Hack Based */ 'Netburners', /* Hacknet-based */ 'Slum Snakes', 'Tetrads' /* Early Crime */
 ]
 const defaultPriorityAugs = ['The Red Pill', "The Blade's Simulacrum", 'Neuroreceptor Management Implant'] // By default, take these augs when they are accessible
 // If not in a gang, and we are nearing unlocking gangs (54K Karma) we will attempt to join any/all of these factions
 const potentialGangFactions = ['Slum Snakes', 'Tetrads', 'The Black Hand', 'The Syndicate', 'The Dark Army', 'Speakers for the Dead']
 const defaultHiddenStats = ['bladeburner', 'hacknet'] // Hide from the summary table by default because they clearly all come from one faction.
 const outputFile = '/Temp/affordable-augs.txt'
+const staneksGift = "Stanek's Gift - Genesis"
 
 // Factors used in calculations
 const nfCountMult = 1.14 // Factors that control how neuroflux prices scale
@@ -24,17 +24,18 @@ let augCountMult = 1.9 // The multiplier for the cost increase of augmentations 
 let favorToDonate // Based on the current BitNode Multipliers, the favour required to donate to factions for reputation.
 // Various globals because this script does not do modularity well
 let playerData = null; let gangFaction = null
-let startingPlayerMoney; let stockValue = 0 // If the player holds stocks, their liquidation value will be determined
+let augsAwaitingInstall; let startingPlayerMoney; let stockValue = 0 // If the player holds stocks, their liquidation value will be determined
 let factionNames = []; let joinedFactions = []; let desiredStatsFilters = []; let purchaseFactionDonations = []
-let ownedAugmentations = []; let simulatedOwnedAugmentations = []; let allAugStats = []; let priorityAugs = []; let purchaseableAugs = []
+let ownedAugmentations = []; let simulatedOwnedAugmentations = []; let effectiveSourceFiles = []; let allAugStats = []; let priorityAugs = []; let purchaseableAugs = []
 let factionData = {}; let augmentationData = {}
 let printToTerminal, ignorePlayerData
 let _ns // Used to avoid passing ns to functions that don't need it except for some logs.
 
 let options = null // A copy of the options used at construction time
 const argsSchema = [ // The set of all command line arguments
-  ['all', false], // Display all factions (spoilers), not just unlocked and early-game factions
-  ['a', false], // Flag alias for --all
+  ['all', false], // Display all factions (spoilers), not just accessible factions
+  ['a', false], // Flag-style alias for --all.
+  ['hide-locked-factions', false], // Don't show factions that we don't currently have access to
   ['verbose', null], // Print the terminal as well as the script logs. If left null, this defaults to true in code now, but can be disabled with an explicit `--verbose false`
   ['v', false], // (Kept for backwards compatilily) this was an alias flag for setting --verbose to true when it previously defaulted to false.
   ['ignore-player-data', false], // Display stats for all factions and augs, despite what we already have (kind of a "mock" mode)
@@ -52,6 +53,8 @@ const argsSchema = [ // The set of all command line arguments
   ['purchase', false], // Set to true to pull the trigger on purchasing all desired augs in the order specified
   ['ignore-stocks', false], // Set to true to ignore the liquidation value of stocks currently held when running
   ['ignore-stanek', false], // Set to true to ignore the fact that stanek is not yet taken before purchasing your first augs
+  ['show-unavailable-aug-purchase-order', false], // Set to true to print the list of unavailable augmentations in optimal purchase order. (Note: Always displayed when no augs are available)
+  ['show-all-purchase-lists', false], // Set to true to re-print the list of augmentations each time it changes
   // Display-related options - controls what information is displayed in the final "cumulative stats by faction" table
   ['sort', null], // What stat is the table of total faction stats sorted by. Defaults to your first --stat-desired
   ['hide-stat', []], // Stats to exclude from the final table (partial matching works)
@@ -65,7 +68,7 @@ const statMultis = ['agility_exp', 'agility', 'charisma_exp', 'charisma', 'compa
   'bladeburner_analysis', 'bladeburner_max_stamina', 'bladeburner_stamina_gain', 'bladeburner_success_chance',
   'hacknet_node_core_cost', 'hacknet_node_level_cost', 'hacknet_node_money', 'hacknet_node_purchase_cost', 'hacknet_node_ram_cost']
 const statShortcuts = ['agi_exp', 'agi', 'cha_exp', 'cha', 'cmp_rep', 'crm_$', 'crm_prob', 'def_exp', 'def', 'dex_exp', 'dex', 'fac_rep', 'hack_prob', 'hack_exp', 'hack_grow', 'hack_$', 'hack', 'hack_speed', 'str_exp', 'str', 'work_$', 'bladeburner', 'hacknet']
-const factions = ['Illuminati', 'Daedalus', 'The Covenant', 'ECorp', 'MegaCorp', 'Bachman & Associates', 'Blade Industries', 'NWO', 'Clarke Incorporated', 'OmniTek Incorporated',
+const allFactions = ['Illuminati', 'Daedalus', 'The Covenant', 'ECorp', 'MegaCorp', 'Bachman & Associates', 'Blade Industries', 'NWO', 'Clarke Incorporated', 'OmniTek Incorporated',
   'Four Sigma', 'KuaiGong International', 'Fulcrum Secret Technologies', 'BitRunners', 'The Black Hand', 'NiteSec', 'Aevum', 'Chongqing', 'Ishima', 'New Tokyo', 'Sector-12',
   'Volhaven', 'Speakers for the Dead', 'The Dark Army', 'The Syndicate', 'Silhouette', 'Tetrads', 'Slum Snakes', 'Netburners', 'Tian Di Hui', 'CyberSec', 'Bladeburners', 'Church of the Machine God']
 // TODO: This list is missing augmentations. Regenerate.
@@ -76,7 +79,7 @@ export function autocomplete (data, args) {
   data.flags(argsSchema)
   const lastFlag = args.length > 1 ? args[args.length - 2] : null
   if (lastFlag === '--sort' || lastFlag === '--stat-desired' || lastFlag === '--hide-stat') { return statShortcuts.concat(statMultis) }
-  if (lastFlag === '--ignore-faction' || lastFlag === '--after-faction') { return factions.map(f => f.replaceAll(' ', '_')).sort() } // Command line doesn't like spaces
+  if (lastFlag === '--ignore-faction' || lastFlag === '--after-faction') { return allFactions.map(f => f.replaceAll(' ', '_')).sort() } // Command line doesn't like spaces
   if (lastFlag === '--omit-aug' || lastFlag === '--aug-desired' || lastFlag === '--priority-aug') { return augmentations.map(f => f.replaceAll(' ', '_')) }
   return []
 }
@@ -91,22 +94,12 @@ export async function main (ns) {
 
   // Ensure all globals are reset before we proceed with the script, in case we've done things out of order
   augCountMult = favorToDonate = playerData = gangFaction = startingPlayerMoney = stockValue = null
-  factionNames = []
-  joinedFactions = []
-  desiredStatsFilters = []
-  purchaseFactionDonations = []
-  ownedAugmentations = []
-  simulatedOwnedAugmentations = []
-  allAugStats = []
-  priorityAugs = []
-  purchaseableAugs = []
-  factionData = {}
-  augmentationData = {}
+  factionNames = [], joinedFactions = [], desiredStatsFilters = [], purchaseFactionDonations = []
+  ownedAugmentations = [], simulatedOwnedAugmentations = [], effectiveSourceFiles = [], allAugStats = [], priorityAugs = [], purchaseableAugs = []
+  factionData = {}, augmentationData = {}
 
   printToTerminal = (options.v || options.verbose === true || options.verbose === null) && !options['join-only']
-  const allFactions = options.a || options.all
   const afterFactions = options['after-faction'].map(f => f.replaceAll('_', ' '))
-  const omitFactions = options['ignore-faction'].map(f => f.replaceAll('_', ' '))
   const omitAugs = options['omit-aug'].map(f => f.replaceAll('_', ' '))
   priorityAugs = options['priority-aug']?.map(f => f.replaceAll('_', ' '))
   if (priorityAugs.length === 0) priorityAugs = defaultPriorityAugs
@@ -116,6 +109,7 @@ export async function main (ns) {
   // Determine which source files are active, which, for one, lets us determine how the cost of augmentations will scale
   playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')
   const ownedSourceFiles = await getActiveSourceFiles(ns, false)
+  effectiveSourceFiles = await getActiveSourceFiles(ns, true)
   const sf4Level = playerData.bitNodeN === 4 ? 3 : ownedSourceFiles[4] || 0 // If in BN4, singularity costs are as though you had SF4.3
   if (sf4Level === 0) { return log(ns, 'ERROR: This script requires SF4 (singularity) functions to work.', true, 'ERROR') } else if (sf4Level < 3) {
     log(ns, 'WARNING: This script makes heavy use of singularity functions, which are quite expensive before you have SF4.3. ' +
@@ -135,6 +129,8 @@ export async function main (ns) {
   log(ns, 'In factions: ' + joinedFactions)
   // Get owned augmentations (whether they've been installed or not). Ignore strNF because you can always buy more.
   ownedAugmentations = await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations(true)', '/Temp/player-augs-purchased.txt')
+  const installedAugmentations = await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations()', '/Temp/player-augs-installed.txt')
+  augsAwaitingInstall = ownedAugmentations.length - installedAugmentations.length
   if (options['neuroflux-disabled']) omitAugs.push(strNF)
   simulatedOwnedAugmentations = ignorePlayerData ? [] : ownedAugmentations.filter(a => a !== strNF)
   // Clear "priority" / "desired" lists of any augs we already own
@@ -142,17 +138,16 @@ export async function main (ns) {
   desiredAugs = desiredAugs.filter(name => !simulatedOwnedAugmentations.includes(name))
   // Determine the set of desired augmentation stats. If not specified by the user, it's based on our situation
   desiredStatsFilters = options['stat-desired']
-  if ((desiredStatsFilters?.length ?? 0) === 0) { // If the user does has not specified stats or augmentations to prioritize, use sane defaults
-    desiredStatsFilters = ownedAugmentations.length > 40 // Once we have more than N augs, switch to buying up anything and everything
-      ? ['_']
-      : playerData.bitNodeN === 6 || playerData.bitNodeN === 7 || playerData.factions.includes('Bladeburners') // If doing bladeburners, combat augs matter too, so just get everything
-        ? ['_']
+  if ((desiredStatsFilters?.length ?? 0) == 0) // If the user does has not specified stats or augmentations to prioritize, use sane defaults
+  {
+    desiredStatsFilters = ownedAugmentations.length > 40 ? ['_'] // Once we have more than N augs, switch to buying up anything and everything
+      : playerData.bitNodeN == 6 || playerData.bitNodeN == 7 || playerData.factions.includes('Bladeburners') ? ['_'] // If doing bladeburners, combat augs matter too, so just get everything
         : ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet', 'crime_money']
   } // Otherwise get hacking + rep boosting, etc. for unlocking augs more quickly
 
   // Prepare global data sets of faction and augmentation information
   log(ns, 'Getting all faction data...')
-  await updateFactionData(ns, allFactions, omitFactions)
+  await updateFactionData(ns, options['ignore-faction'].map(f => f.replaceAll('_', ' ')))
   log(ns, 'Getting all augmentation data...')
   await updateAugmentationData(ns, desiredAugs)
 
@@ -169,21 +164,26 @@ export async function main (ns) {
     displayJoinedFactionSummary(ns)
   }
 
-  // Create the table of all augmentations, and the breakdown of what we can afford
-  await manageUnownedAugmentations(ns, omitAugs)
+  // Display the summary of all factions and total aug stats available from each
   let hideSummaryStats = options['hide-stat']
-  if (hideSummaryStats.length === 0) hideSummaryStats = defaultHiddenStats
+  if (hideSummaryStats.length == 0) hideSummaryStats = defaultHiddenStats
   const sort = unshorten(options.sort || desiredStatsFilters[0])
   displayFactionSummary(ns, sort, options.u || options.unique, afterFactions, hideSummaryStats)
-  if (options.purchase && ownedAugmentations.length <= 1 && 13 in ownedSourceFiles && !ownedAugmentations.includes('Stanek\'s Gift - Genesis') && !options['ignore-stanek']) {
-    log(ns, 'WARNING: You have not yet accepted Stanek\'s Gift from the church in Chongqing. Purchasing augs will ' +
-            'prevent you from doing so for the rest of this BN. (Run with \'--ignore-stanek\' to bypass this warning.)', true)
-  } else if (options.purchase && purchaseableAugs) {
+
+  // Create the table of all augmentations, and the breakdown of what we can afford
+  await manageUnownedAugmentations(ns, omitAugs)
+
+  /* TODO: Currently, an exploit lets us accept Stanek's gift after purchasing other augs. Once that stops working, we should put this back
+    if (options.purchase && ownedAugmentations.length <= 1 && 13 in ownedSourceFiles && !ownedAugmentations.includes(staneksGift) && !options['ignore-stanek'])
+        log(ns, `WARNING: You have not yet accepted Stanek's Gift from the church in Chongqing. Purchasing augs will ` +
+            `prevent you from doing so for the rest of this BN. (Run with '--ignore-stanek' to bypass this warning.)`, true);
+    else */ if (options.purchase && purchaseableAugs) {
     await purchaseDesiredAugs(ns)
     await ns.write(outputFile, '', 'w') // Clear the file so it isn't misinterpreted on next reset.
-  } else if (!ignorePlayerData) { // Write a temp file that summarizes what augs we could afford if we could ascend right now.
+  } else if (!ignorePlayerData) // Write a temp file that summarizes what augs we could afford if we could ascend right now.
+  {
     await ns.write(outputFile, JSON.stringify({
-      affordable_nf_count: purchaseableAugs.filter(a => a.name === strNF).length,
+      affordable_nf_count: purchaseableAugs.filter(a => a.name == strNF).length,
       affordable_augs: [...new Set(purchaseableAugs.map(a => a.name))],
       owned_count: Object.values(augmentationData).filter(a => a.owned).length,
       unowned_count: Object.values(augmentationData).filter(a => !a.owned).length,
@@ -212,6 +212,7 @@ function unshorten (strMult) {
   if (!strMult) return strMult
   if (statMultis.includes(strMult)) return strMult + '_mult' // They just omitted the "_mult" suffix shared by all
   if (statMultis.includes(strMult.replace('_mult', ''))) return strMult // It's fine as is
+  if (strMult === '_') return 'hacking_mult' // Default if no stat was provided.
   const match = statMultis.find(m => shorten(m) === strMult) || // Match on the short-form of a multiplier|| // Match on the short-form of a multiplier
         statMultis.find(m => m.startsWith(strMult)) || // Otherwise match on the first multiplier that starts with the provided string
         statMultis.find(m => m.includes(strMult)) // Otherwise match on the first multiplier that contains the provided string
@@ -229,15 +230,20 @@ const factionSortValue = faction => {
 const dictCommand = (command) => `Object.fromEntries(ns.args.map(o => [o, ${command}]))`
 
 /** @param {NS} ns **/
-async function updateFactionData (ns, allFactions, factionsToOmit) {
-  factionNames = preferredFactionOrder.filter(f => !factionsToOmit.includes(f))
-  // Add any player joined factions that may not be in the pre-defined list
-  factionNames.push(...joinedFactions.filter(f => !factionNames.includes(f) && !factionsToOmit.includes(f)))
-  // Add any factions that the player has earned an invite to
+async function updateFactionData (ns, factionsToOmit) {
+  // Gather a list of all faction names to collect information about. Start with any player joined and invited factions
   const invitations = await getNsDataThroughFile(ns, 'ns.checkFactionInvitations()', '/Temp/checkFactionInvitations.txt')
-  factionNames.push(...invitations.filter(f => !factionNames.includes(f) && !factionsToOmit.includes(f)))
-  // If specified, get info about *all* factions in the game, not just the ones hard-coded in the preferred faction order list.
-  if (allFactions) { factionNames.push(...factions.filter(f => !factionNames.includes(f) && !factionsToOmit.includes(f))) }
+  factionNames = joinedFactions.concat(invitations)
+  // Add in factions the user hasn't seen. All factions by default, or a small subset of easy-access factions if --hide-locked-factions is set
+  factionNames.push(...(options['hide-locked-factions'] ? easyAccessFactions : allFactions).filter(f => !factionNames.includes(f)))
+  // Unless "all factions" is requested, omit factions that are in no way accessible on this reset
+  if (!(options.a || options.all)) {
+    if (!(13 in effectiveSourceFiles)) factionsToOmit.push('Church of the Machine God')
+    if (!(6 in effectiveSourceFiles || 7 in effectiveSourceFiles)) factionsToOmit.push('Bladeburners')
+  }
+  // Finally, remove all factions marked as omitted
+  log(ns, `We "know" about ${factionNames.length} factions, and will omit ${factionsToOmit.length} of them.`)
+  factionNames = factionNames.filter(f => !factionsToOmit.includes(f))
 
   const dictFactionAugs = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationsFromFaction(o)'), '/Temp/getAugmentationsFromFactions.txt', factionNames)
   const dictFactionReps = await getNsDataThroughFile(ns, dictCommand('ns.getFactionRep(o)'), '/Temp/getFactionReps.txt', factionNames)
@@ -254,16 +260,13 @@ async function updateFactionData (ns, allFactions, factionsToOmit) {
     favor: dictFactionFavors[faction],
     donationsUnlocked: dictFactionFavors[faction] >= favorToDonate &&
             // As a rule, cannot donate to gang factions or any of the below factions - need to use other mechanics to gain rep.
-            ![gangFaction, 'Bladeburners', 'Church of the Machine God', 'Shadows of Anarchy'].includes(faction),
+            ![gangFaction, 'Bladeburners', 'Church of the Machine God'].includes(faction),
     augmentations: dictFactionAugs[faction],
     unownedAugmentations: function (includeNf = false) { return this.augmentations.filter(aug => !simulatedOwnedAugmentations.includes(aug) && (aug !== strNF || includeNf)) },
     mostExpensiveAugCost: function () { return this.augmentations.map(augName => augmentationData[augName]).reduce((max, aug) => Math.max(max, aug.price), 0) },
     totalUnownedMults: function () {
       return this.unownedAugmentations().map(augName => augmentationData[augName])
-        .reduce((arr, aug) => Object.keys(aug.stats).forEach(stat => {
-          arr[stat] = ((arr[stat] || 1) * aug.stats[stat])
-          return arr[stat]
-        }) || arr, new Map())
+        .reduce((arr, aug) => Object.keys(aug.stats).forEach(stat => arr[stat] = ((arr[stat] || 1) * aug.stats[stat])) || arr, new Map())
     }
   }]))
 }
@@ -277,13 +280,14 @@ async function updateAugmentationData (ns, desiredAugs) {
   const dictAugPrereqs = await getNsDataThroughFile(ns, dictCommand('ns.getAugmentationPrereq(o)'), '/Temp/getAugmentationPrereqs.txt', augmentationNames)
   augmentationData = Object.fromEntries(augmentationNames.map(aug => [aug, {
     name: aug,
+    displayName: aug,
     owned: simulatedOwnedAugmentations.includes(aug),
     reputation: dictAugRepReqs[aug],
     price: dictAugPrices[aug],
     stats: dictAugStats[aug],
     prereqs: dictAugPrereqs[aug] || [],
     // The best augmentations either have no stats (special effect like no Focus penalty, or Red Pill), or stats in the 'stat-desired' command line options
-    desired: desiredAugs.includes(aug) || Object.keys(dictAugStats[aug]).length === 0 ||
+    desired: desiredAugs.includes(aug) || Object.keys(dictAugStats[aug]).length == 0 ||
             Object.keys(dictAugStats[aug]).some(key => desiredStatsFilters.some(filter => key.includes(filter))),
     // Get the name of the "most-early-game" faction from which we can buy this augmentation. Estimate this by cost of the most expensive aug the offer
     getFromAny: factionNames.map(f => factionData[f]).sort((a, b) => a.mostExpensiveAugCost - b.mostExpensiveAugCost)
@@ -304,15 +308,19 @@ async function updateAugmentationData (ns, desiredAugs) {
     toString: function () {
       const factionColWidth = 16; const augColWidth = 40; const statsColWidth = 60
       const statKeys = Object.keys(this.stats)
-      const statsString = `Stats:${statKeys.length.toFixed(0).padStart(2)}` + (statKeys.length === 0 ? '' : ` { ${statKeys.map(prop => shorten(prop) + ': ' + this.stats[prop]).join(', ')} }`)
+      const statsString = `Stats:${statKeys.length.toFixed(0).padStart(2)}` + (statKeys.length == 0
+        ? ''
+        : ` { ${statKeys.map(prop => shorten(prop) + ': ' + Math.round((this.stats[prop] + Number.EPSILON) * 100) / 100).join(', ')} }`)
       const factionName = this.getFromJoined() || this.getFromAny
       const fCreep = Math.max(0, factionName.length - factionColWidth)
-      const augNameShort = this.name.length <= (augColWidth - fCreep)
-        ? this.name
-        : `${this.name.slice(0, Math.ceil(augColWidth / 2 - 3 - fCreep))}...${this.name.slice(this.name.length - Math.floor(augColWidth / 2))}`
-      return `${this.desired ? '*' : ' '} ${this.canAfford() ? '✓' : this.canAffordWithDonation() ? '$' : '✗'} Price: ${formatMoney(this.price, 4).padEnd(7)}  ` +
-                `Rep: ${formatNumberShort(this.reputation, 4)}  Faction: ${factionName.padEnd(factionColWidth)}  Aug: ${augNameShort.padEnd(augColWidth - fCreep)}` +
-                `  ${statsString.length <= statsColWidth ? statsString : (statsString.substring(0, statsColWidth - 4) + '... }')}`
+      const budget = playerData.money + stockValue
+      const augNameShort = this.displayName.length <= (augColWidth - fCreep)
+        ? this.displayName
+        : `${this.displayName.slice(0, Math.ceil(augColWidth / 2 - 3 - fCreep))}...${this.displayName.slice(this.displayName.length - Math.floor(augColWidth / 2))}`
+      return `${this.desired ? '*' : ' '} Price: ${formatMoney(this.price, 4).padEnd(7)} ${this.price <= budget ? '✓' : '✗'}  ` +
+                `Rep: ${formatNumberShort(this.reputation, 4).padEnd(6)} ${this.canAfford() ? '✓' : this.canAffordWithDonation() ? '$' : '✗'}  ` +
+                `Faction: ${factionName.padEnd(factionColWidth)}  Aug: ${augNameShort.padEnd(augColWidth - fCreep)}  ` +
+                `${statsString.length <= statsColWidth ? statsString : (statsString.substring(0, statsColWidth - 4) + '... }')}`
     }
   }]))
   // Propagate desired/priority status to any dependencies of desired augs. Note when --all-factions mode is not enabled, it's possible some prereqs are not in our list
@@ -353,15 +361,15 @@ async function joinFactions (ns, forceJoinFactions) {
     const newAugs = unownedAugs.filter(aug => !accessibleAugmentations.has(aug)) //  Filter out augmentations we can purchase from another faction we've already joined
     const desiredAugs = newAugs.filter(aug => augmentationData[aug].desired) //  Filter out augmentations we have no interest in
     log(ns, `${faction.name} has ${faction.augmentations.length} augs, ${unownedAugs.length} unowned, ${newAugs.length} not offered by joined factions, ` +
-            `${desiredAugs.length} with desirable stats` + (desiredAugs.length === 0 ? ' (not joining)' : `: ${JSON.stringify(desiredAugs)}`))
-    if (desiredAugs.length === 0 && !forceJoinFactions.includes(faction.name)) continue
+            `${desiredAugs.length} with desirable stats` + (desiredAugs.length == 0 ? ' (not joining)' : `: ${JSON.stringify(desiredAugs)}`))
+    if (desiredAugs.length == 0 && !forceJoinFactions.includes(faction.name)) continue
     if (manualJoin.includes(faction.name) && !forceJoinFactions.includes(faction.name)) {
       log(ns, `INFO: You have an invite from faction ${faction.name}, but it will not be automatically joined, ` +
                 'because this would prevent you from joining some other factions.', printToTerminal, printToTerminal ? 'info' : undefined)
     } else {
       log(ns, `Joining faction ${faction.name} which has ${desiredAugs.length} desired augmentations: ${desiredAugs}`)
-      const response = await getNsDataThroughFile(ns, 'ns.joinFaction(ns.args[0])', '/Temp/join-faction.txt', [faction.name])
-      if (response) {
+      let response
+      if (response = await getNsDataThroughFile(ns, 'ns.joinFaction(ns.args[0])', '/Temp/join-faction.txt', [faction.name])) {
         faction.joined = true
         faction.augmentations.forEach(aug => accessibleAugmentations.add(aug))
         joinedFactions.push(faction.name)
@@ -381,7 +389,7 @@ const getTotalCost = (augPurchaseOrder) => augPurchaseOrder.reduce((total, aug, 
 
 const augSortOrder = (a, b) =>
 // Hack: Multiple NF have to be from most least expensive to most expensive
-  (a.name === strNF && b.name === strNF ? a.price - b.price : 0) ||
+  (a.name == strNF && b.name == strNF ? a.price - b.price : 0) ||
     (b.price - a.price) || (b.reputation - a.reputation) ||
     (b.desired !== a.desired ? (a.desired ? -1 : 1) : a.name.localeCompare(b.name))
 
@@ -391,7 +399,7 @@ function sortAugs (ns, augs = []) {
   // Bubble up prerequisites to the top
   for (let i = 0; i < augs.length; i++) {
     for (let j = 0; j < augs[i].prereqs.length; j++) {
-      const prereqIndex = augs.findIndex(a => a.name === augs[i].prereqs[j])
+      const prereqIndex = augs.findIndex(a => a.name == augs[i].prereqs[j])
       if (prereqIndex === -1 /* Already bought */ || prereqIndex < i /* Already sorted up */) continue
       augs.splice(i, 0, augs.splice(prereqIndex, 1)[0])
       i -= 1 // Back up i so that we revisit the prerequisites' own prerequisites
@@ -403,31 +411,31 @@ function sortAugs (ns, augs = []) {
   return augs
   // Since we are no longer most-expensive to least-expensive, the "ideal purchase order" is more complicated.
   // So now see if moving each chunk of prereqs down a slot reduces the overall price.
-//   const initialCost = getTotalCost(augs)
-//   let totalMoves = 0
-//   for (let i = augs.length - 1; i > 0; i--) {
-//     let batchLengh = 1 // Look for a "batch" of prerequisites, evidenced by augs above this one being cheaper instead of more expensive
-//     while (i - batchLengh >= 0 && augs[i].price > augs[i - batchLengh].price) batchLengh++
-//     if (batchLengh == 1) continue // Not the start of a batch of prerequisites
-//     // log(ns, `Detected a batch of length ${batchLengh} from ${augs[i - batchLengh + 1].name} to ${augs[i].name}`);
-//     let moved = 0; let bestCost = initialCost
-//     while (i + moved + 1 < augs.length) { // See if promoting augs from below the batch to above the batch reduces the overall cost
-//       const testOrder = augs.slice(); const moveIndex = i + moved + 1; const insertionIndex = i - batchLengh + 1 + moved
-//       testOrder.splice(insertionIndex, 0, testOrder.splice(moveIndex, 1)[0]) // Try moving it above the batch
-//       const newCost = getTotalCost(testOrder)
-//       // log(ns, `Cost would change by ${((newCost - bestCost) / bestCost * 100).toPrecision(2)}% from ${formatMoney(bestCost)} to ${formatMoney(newCost)} by buying ${augs[moveIndex].name} before ${augs[insertionIndex].name}`);
-//       if (bestCost < newCost) break // If the cost is worse or the same, stop shifting augs
-//       // log(ns, `Cost reduced by ${formatMoney(bestCost - newCost)} from ${formatMoney(bestCost)} to ${formatMoney(newCost)} by buying ${augs[moveIndex].name} before ${augs[insertionIndex].name}`);
-//       bestCost = newCost
-//       augs.splice(insertionIndex, 0, augs.splice(moveIndex, 1)[0]) // Found a cheaper sort order - lock in the move!
-//       moved++
-//     }
-//     i = i - batchLengh + 1 // Decrement i to past the batch so it doesn't try to change the batch's own order
-//     totalMoves += moved
-//   }
-//   const finalCost = getTotalCost(augs)
-//   if (totalMoves > 0) log(ns, `Cost reduced by ${formatMoney(initialCost - finalCost)} (from ${formatMoney(initialCost)} to ${formatMoney(finalCost)}) by bubbling ${totalMoves} augs up above batches of dependencies.`)
-//   return augs
+  const initialCost = getTotalCost(augs)
+  let totalMoves = 0
+  for (let i = augs.length - 1; i > 0; i--) {
+    let batchLengh = 1 // Look for a "batch" of prerequisites, evidenced by augs above this one being cheaper instead of more expensive
+    while (i - batchLengh >= 0 && augs[i].price > augs[i - batchLengh].price) batchLengh++
+    if (batchLengh == 1) continue // Not the start of a batch of prerequisites
+    // log(ns, `Detected a batch of length ${batchLengh} from ${augs[i - batchLengh + 1].name} to ${augs[i].name}`);
+    let moved = 0; let bestCost = initialCost
+    while (i + moved + 1 < augs.length) { // See if promoting augs from below the batch to above the batch reduces the overall cost
+      const testOrder = augs.slice(); const moveIndex = i + moved + 1; const insertionIndex = i - batchLengh + 1 + moved
+      testOrder.splice(insertionIndex, 0, testOrder.splice(moveIndex, 1)[0]) // Try moving it above the batch
+      const newCost = getTotalCost(testOrder)
+      // log(ns, `Cost would change by ${((newCost - bestCost) / bestCost * 100).toPrecision(2)}% from ${formatMoney(bestCost)} to ${formatMoney(newCost)} by buying ${augs[moveIndex].name} before ${augs[insertionIndex].name}`);
+      if (bestCost < newCost) break // If the cost is worse or the same, stop shifting augs
+      // log(ns, `Cost reduced by ${formatMoney(bestCost - newCost)} from ${formatMoney(bestCost)} to ${formatMoney(newCost)} by buying ${augs[moveIndex].name} before ${augs[insertionIndex].name}`);
+      bestCost = newCost
+      augs.splice(insertionIndex, 0, augs.splice(moveIndex, 1)[0]) // Found a cheaper sort order - lock in the move!
+      moved++
+    }
+    i = i - batchLengh + 1 // Decrement i to past the batch so it doesn't try to change the batch's own order
+    totalMoves += moved
+  }
+  const finalCost = getTotalCost(augs)
+  if (totalMoves > 0) log(ns, `Cost reduced by ${formatMoney(initialCost - finalCost)} (from ${formatMoney(initialCost)} to ${formatMoney(finalCost)}) by bubbling ${totalMoves} augs up above batches of dependencies.`)
+  return augs
 }
 
 /** @param {NS} ns
@@ -437,15 +445,19 @@ async function manageUnownedAugmentations (ns, ignoredAugs) {
   // Note: A change coming soon will convert DaedalusAugsRequirement from a fractional multiplier, to an integer number of augs. This should support both for now.
   const reqDaedalusAugs = bitNodeMults.DaedalusAugsRequirement < 2 ? Math.round(30 * bitNodeMults.DaedalusAugsRequirement) : bitNodeMults.DaedalusAugsRequirement
   const outputRows = [`Currently have ${ownedAugmentations.length}/${reqDaedalusAugs} Augmentations required for Daedalus.`]
-  const unownedAugs = Object.values(augmentationData).filter(aug => (!aug.owned || aug.name === strNF) && !ignoredAugs.includes(aug.name))
-  if (unownedAugs.length === 0) return log(ns, `All ${Object.keys(augmentationData).length} augmentations are either owned or ignored!`, printToTerminal)
+  const unownedAugs = Object.values(augmentationData).filter(aug => (!aug.owned || aug.name == strNF) && !ignoredAugs.includes(aug.name))
+  if (unownedAugs.length == 0) return log(ns, `All ${Object.keys(augmentationData).length} augmentations are either owned or ignored!`, printToTerminal)
   const unavailableAugs = unownedAugs.filter(aug => aug.getFromJoined() == null)
-  const firstListPrinted = unavailableAugs.length > 0
-  if (firstListPrinted) await manageFilteredSubset(ns, outputRows, 'Unavailable', unavailableAugs, true)
-  // We use the return value to "lock in" the new sort order. Going forward, the routine will only re-print the aug list if the sort order changes (or forcePrint == true)
-  const availableAugs = ignorePlayerData
-    ? unavailableAugs
-    : await manageFilteredSubset(ns, outputRows, 'Available', unownedAugs.filter(aug => aug.getFromJoined() != null), firstListPrinted ? undefined : true)
+  let availableAugs = unownedAugs.filter(aug => aug.getFromJoined() !== null)
+  // List unavailable augs only if there are none available, or if the user specifically requested to see this list.
+  if (availableAugs.length == 0 || unavailableAugs.length > 0 && options['show-unavailable-aug-purchase-order']) { await manageFilteredSubset(ns, outputRows, 'Unavailable', unavailableAugs, true, false) }
+  // Prepare and display a little legend of what symbols in our augmentation list mean
+  const legendTitle = 'Optimized Purchase Order Legend'
+  outputRows.push(legendTitle, '-'.repeat(legendTitle.length), '✓  Can afford', '✗  Cannot afford', '$  Can donate for rep',
+        `*  Desired aug/stats (${desiredStatsFilters.join(', ')})`, '-'.repeat(legendTitle.length))
+  // Display available augs. We use the return value to "lock in" the new sort order. If enabled, subsequent tables are displayed if the filtered sort order changes.
+  availableAugs = ignorePlayerData ? unavailableAugs // Note: We omit NF from available augs here because as many as we can afford are added at the end.
+    : await manageFilteredSubset(ns, outputRows, 'Available', availableAugs.filter(aug => aug.name !== strNF), true)
   if (availableAugs?.length > 0) {
     let augsWithRep = availableAugs.filter(aug => aug.canAfford() || (aug.canAffordWithDonation() && !options['disable-donations']))
     let desiredAugs = availableAugs.filter(aug => aug.desired)
@@ -459,8 +471,13 @@ async function manageUnownedAugmentations (ns, ignoredAugs) {
     const accessibleAugs = await manageFilteredSubset(ns, outputRows, 'Desired Within Rep', augsWithRep.filter(aug => aug.desired))
     await managePurchaseableAugs(ns, outputRows, accessibleAugs)
   }
-  // Print all rows of output that were prepped
+  // Print all rows of output that were prepped. Keep as many rows in one log as possible to avoid scrolling the history too much
   log(ns, outputRows.join('\n  '), printToTerminal)
+  if (purchaseableAugs.length > 0) {
+    log(ns, `INFO: The above ${purchaseableAugs.length} augmentations ${options.purchase ? 'will' : 'can'} be purchased ` +
+            `${stockValue > 0 ? 'after liquidating stocks' : 'right now'}.` +
+            (options.purchase ? '' : ' Run with the --purchase flag to make the purchase.'), printToTerminal)
+  }
 }
 
 /** @param {[]} sortedAugs
@@ -474,35 +491,46 @@ function computeCosts (sortedAugs) {
 
 /** Helper to produce a summary of the cost of augs with reputation. */
 function getCostString (augCost, repCost) {
-  return `${formatMoney(augCost + repCost, 4)}` + (repCost === 0 ? '' : ` (Augs: ${formatMoney(augCost, 4)} + Rep: ${formatMoney(repCost, 4)})`)
+  return `${formatMoney(augCost + repCost, 4)}` + (repCost == 0 ? '' : ` (Augs: ${formatMoney(augCost, 4)} + Rep: ${formatMoney(repCost, 4)})`)
 }
 
-/** @param {NS} ns
- * Helper to generate outputs for different subsets of the augmentations, each in optimal sort order */
-async function manageFilteredSubset (ns, outputRows, subsetName, subset, printList = undefined /* undefined => automatically print if sort order changed */) {
+/** Helper to remove augs that cannot be purchased because their prerequisites are not owned and have been filtered out */
+function filterMissingPrereqs (ns, subset) {
+  let subsetLength
+  do {
+    subsetLength = subset.length
+    for (const aug of subset) {
+      const missingPreqs = aug.prereqs.filter(prereq => !(simulatedOwnedAugmentations.includes(prereq) || subset.some(a => a.name === prereq)))
+      if (missingPreqs.length > 0) {
+        log(ns, `INFO: Removing from aug "${aug.name}" (${aug.getFromAny}) due to prerequisites having been filtered out: ${missingPreqs}`)
+        subset.splice(subset.indexOf(aug), 1)
+      }
+    }
+    // If any augs were removed, we mut loop back to the start and see if that means other augs need removing
+  } while (subsetLength !== subset.length)
+  return subset
+}
+
+/** Helper to generate outputs for different subsets of the augmentations, each in optimal sort order
+ * @param {NS} ns
+ * @param {boolean|undefined} printList - if undefined => automatically print if sort order changed
+ *  */
+async function manageFilteredSubset (ns, outputRows, subsetName, subset, printList = undefined, removeMissingPrereqs = true, reorder = true) {
   subset = subset.slice() // Take a copy so we don't mess up the original array sent in.
-  let subsetLength = subset.length
-  if (subsetLength === 0) {
+  // If enabled, filter out augs who are missing prerequisites
+  if (removeMissingPrereqs) { filterMissingPrereqs(ns, subset) }
+  const subsetLength = subset.length
+  if (subsetLength == 0) {
     outputRows.push(`There are 0 ${subsetName}`)
     return subset
   }
-  // Remove augs that cannot be purchased because their prerequisites are not owned and have been filtered out
-  do {
-    subsetLength = subset.length
-    for (const aug of subset.slice()) {
-      if (aug.prereqs.length > 0 && aug.prereqs.some(prereq => !(simulatedOwnedAugmentations.includes(prereq) || subset.some(a => a.name === prereq)))) { subset.splice(subset.indexOf(aug), 1) }
-    }
-  } while (subsetLength !== subset.length)
   // Sort the filtered subset into its optimal purchase order
-  const subsetSorted = sortAugs(ns, subset.slice())
+  const subsetSorted = reorder ? sortAugs(ns, subset.slice()) : subset
   const [repCostByFaction, totalRepCost, totalAugCost] = computeCosts(subsetSorted)
   // By default, if the purchase order is unchanged after filtering out augmentations, don't bother reprinting the full list
-  if (printList === true || (printList === undefined && !subset.every((v, i) => v === subsetSorted[i]))) {
-    outputRows.push(`${subset.length} ${subsetName} Augmentations in Optimized Purchase Order (*'s are desired augs and/or stats: ` +
-            `${desiredStatsFilters.join(', ')}):\n  ${subsetSorted.join('\n  ')}`)
-  }
+  if (printList === true || printList !== false && options['show-all-purchase-lists'] && !subset.every((v, i) => v == subsetSorted[i])) { outputRows.push(`${subset.length} ${subsetName} Augmentations in Optimized Purchase Order:\n  ${subsetSorted.join('\n  ')}`) }
   outputRows.push(`Total Cost of ${subset.length} ${subsetName}:`.padEnd(37) + ` ${getCostString(totalAugCost, totalRepCost)}` +
-        (totalRepCost === 0 ? '' : `  Donate: {${Object.keys(repCostByFaction).map(f => `"${f}":${formatNumberShort(repCostByFaction[f], 4)}`).join(', ')}}`))
+        (totalRepCost == 0 ? '' : `  Donate: {${Object.keys(repCostByFaction).map(f => `"${f}":${formatNumberShort(repCostByFaction[f], 4)}`).join(', ')}}`))
   return subsetSorted
 }
 
@@ -519,18 +547,17 @@ async function managePurchaseableAugs (ns, outputRows, accessibleAugs) {
     const aug = augmentationData[name]
     return !aug || !accessibleAugs.includes(aug) || aug.price + getReqDonationForAug(aug) > budget
   })
-  if (inaccessiblePriorityAugs.length > 0) { outputRows.push(`NOTE: ${inaccessiblePriorityAugs.length} 'priority' augs are not yet accessible: ${inaccessiblePriorityAugs.map(n => `"${n}"`).join(', ')}`) }
   const droppedPriorityAugs = inaccessiblePriorityAugs
   do { // Outer loop is only repeated if we have to drop a priority aug and start over with our purchasable augs determination
     restart = false // Flag as to whether we need to loop again with different starting set of priority augs
     dropped = []
-    purchaseableAugs = accessibleAugs.slice().filter(a => !droppedPriorityAugs.includes(a.name) && a.price + getReqDonationForAug(a) <= budget);
+    purchaseableAugs = filterMissingPrereqs(ns, accessibleAugs.slice().filter(a => !droppedPriorityAugs.includes(a.name) && a.price + getReqDonationForAug(a) <= budget));
     [purchaseFactionDonations, totalRepCost, totalAugCost] = computeCosts(purchaseableAugs)
     // Remove the most expensive augmentation until we can afford all that remain
     while (totalAugCost + totalRepCost > budget && purchaseableAugs.length > 0) {
       const mostExpensiveAug = purchaseableAugs.filter(a => !priorityAugs.includes(a.name)).slice().sort((a, b) => b.price - a.price)[0]
       if (!mostExpensiveAug) { // If there is nothing but "priority augs" left, then we need the user to deprioritize one or the other
-        const aPa = priorityAugs.filter(name => purchaseableAugs.some(a => a.name === name))
+        const aPa = priorityAugs.filter(name => purchaseableAugs.some(a => a.name == name))
         const toDrop = aPa[aPa.length - 1]
         log(ns, `WARNING: We can afford ${aPa.length} priority augs on their own, but not together. We must drop the lowest-priority one: ${toDrop}`, true, 'warning')
         droppedPriorityAugs.push(toDrop)
@@ -545,17 +572,36 @@ async function managePurchaseableAugs (ns, outputRows, accessibleAugs) {
       log(ns, `Dropping aug from the purchase order: "${mostExpensiveAug.name}". New total cost: ${costAfter}`)
     }
   } while (restart)
-  // Display the reduced list of affordable purchases as a separate section
-  manageFilteredSubset(ns, outputRows, 'Affordable', purchaseableAugs, true)
-  if (dropped.length > 0) { // Let the user know how far away we are from being able to get just one more aug:
-    outputRows.push(`Insufficient funds: had to drop ${dropped.length} augs. Next aug "${dropped[0].aug.name}" at: ${dropped[0].costBefore}`)
+
+  // TODO: Stanek Exploit, may be patched in the future. We can "accept Stanek's Gift" by buying this aug at any time, even after buying other augs.
+  if (!options['ignore-stanek'] && !ownedAugmentations.includes(staneksGift) && staneksGift in augmentationData) {
+    const giftAug = augmentationData[staneksGift]
+    giftAug.joinedFactionsWithAug = giftAug.getFromJoined = () => 'Church of the Machine God' // We can buy it from them, even if not technically joined
+    giftAug.canAfford = () => true
+    purchaseableAugs.push(giftAug)
   }
+
+  // Display unique affordable augs, but only show the full list if we aren't adding neuroflux levels below
+  manageFilteredSubset(ns, outputRows, 'Unique Affordable', purchaseableAugs, options['neuroflux-disabled'])
+
+  // The the user know about some of the next upcoming augs / import augs that had to be dropped
+  const nextUpAug = dropped.length == 0
+    ? null
+    : 'Next desired aug available at:'.padEnd(37) + ` ${dropped[0].costBefore}  ` +
+        `for "${dropped[0].aug.name}" from "${dropped[0].aug.getFromJoined()}" (cheapest of ${dropped.length} dropped augs)`
+  if (nextUpAug && options['neuroflux-disabled']) outputRows.push(nextUpAug) // Output this now if we will be exiting early, otherwise save for after the last table.
+  if (augsAwaitingInstall > 0) {
+    outputRows.push(`WARNING: Prices all have a x ${formatNumberShort(augCountMult ** augsAwaitingInstall)} cost penalty, because ` +
+            `${augsAwaitingInstall} Augmentations are were previously purchased but are not yet installed.`)
+  }
+  if (inaccessiblePriorityAugs.length > 0) { outputRows.push(`INFO: ${inaccessiblePriorityAugs.length} 'priority' augs are not yet accessible: ${inaccessiblePriorityAugs.map(n => `"${n}"`).join(', ')}`) }
   const additionalDroppedPri = droppedPriorityAugs.filter(n => !inaccessiblePriorityAugs.includes(n))
-  if (additionalDroppedPri.length > 0) { outputRows.push(`NOTE: ${additionalDroppedPri.length} 'priority' augs had to be droped: ${additionalDroppedPri.map(n => `"${n}"`).join(', ')}`) }
+  if (additionalDroppedPri.length > 0) { outputRows.push(`INFO: ${additionalDroppedPri.length} 'priority' augs had to be droped: ${additionalDroppedPri.map(n => `"${n}"`).join(', ')}`) }
 
   // NEXT STEP: Add as many NeuroFlux levels to our purchase as we can (unless disabled)
   if (options['neuroflux-disabled']) return
   const augNf = augmentationData[strNF]
+  let nfLevel = Math.round(Math.log(augNf.price / (augCountMult ** augsAwaitingInstall) / 750000) / Math.log(1.14))
   // Prefer to purchase NF first from whatever **joined** factions can currently afford the next NF level, next from factions with donations unlocked
   //   (allow us to continuously donate for more), finally by faction with the most current reputation.
   augNf.getFromJoined = function () { // NOTE: Must be a function (not a lambda) so that `this` is bound to the augmentation object.
@@ -591,8 +637,7 @@ async function managePurchaseableAugs (ns, outputRows, accessibleAugs) {
       getFrom = augNf.getFromJoined()
       if (!getFrom) return log(ns, 'Cannot buy any NF due to no joined or joinable factions offering it.')
     }
-    if (!augNf.canAfford() && !augNf.canAffordWithDonation()) { return log(ns, `Cannot buy any NF due to best provider faction ${getFrom} having insufficient rep, and donations are not unlocked.`) }
-    if (joined) outputRows.push(`SUCCESS: Joined ${joined} factions just to gain access to additional NeuroFlux levels.`)
+    if (!augNf.canAfford() && !augNf.canAffordWithDonation()) { log(ns, `Cannot buy any NF due to best provider faction ${getFrom} having insufficient rep, and donations are not unlocked.`) } else if (joined) { outputRows.push(`SUCCESS: Joined ${joined} factions just to gain access to additional NeuroFlux levels.`) }
   }
   if (getFrom && !factionData[getFrom].donationsUnlocked) {
     // TODO: If the faction with the most reputation does not suport dontating for additional rep, and another faction with less rep does,
@@ -602,15 +647,20 @@ async function managePurchaseableAugs (ns, outputRows, accessibleAugs) {
                 'Until logic is built to handle this, consider joining one or more factions that support donating for reputation.')
     }
   }
+  // Temporarily remove free (money) augmentations from the purchase order, they can be added on after NF purchases.
+  const cheapAugs = purchaseableAugs.filter(a => a.price == 0)
+  purchaseableAugs = purchaseableAugs.filter(a => a.price > 0)
+  const augsCheaperThanNF = purchaseableAugs.filter(a => a.price < augNf.price).length
   // Start adding as many neuroflux levels as we can afford
   let nfPurchased = purchaseableAugs.filter(a => a.name === augNf.name).length
   const augNfFaction = factionData[augNf.getFromJoined()]
-  if (nfPurchased === 1) {
+  if (augNfFaction && (augNf.canAfford() || augNf.canAffordWithDonation())) {
     log(ns, `Getting NF from faction ${augNfFaction.name} (rep: ${formatNumberShort(augNfFaction.reputation)}). Cost of NF 1 is ` +
             `${formatMoney(augNf.price)}, requires reputation: ${formatNumberShort(augNf.reputation)} ` +
-            `(have ${formatNumberShort(augNfFaction.reputation)}, donate ${formatMoney(purchaseFactionDonations[augNfFaction.name] || 0)})`)
+            `(have ${formatNumberShort(augNfFaction.reputation)}, donate ${formatNumberShort(getReqDonationForRep(augNf.reputation, augNfFaction))})`)
   }
-  while (nfPurchased < 200) { // Limit to 200 to avoid breaking the game if near infinite money.
+  let nextUpNf // Will tell the user when they will unlock the next NF level
+  while (augNfFaction && nfPurchased < 200) { // Limit to 200 to avoid breaking the game if near infinite money.
     const nextNfCost = augNf.price * (nfCountMult ** nfPurchased) * (augCountMult ** purchaseableAugs.length)
     const nextNfRep = augNf.reputation * (nfCountMult ** nfPurchased)
     const currentNfFactionDonation = purchaseFactionDonations[augNfFaction.name] || 0
@@ -620,31 +670,36 @@ async function managePurchaseableAugs (ns, outputRows, accessibleAugs) {
     log(ns, `NF ${String(nfPurchased + 1).padStart(2)} Requires ${formatNumberShort(nextNfRep, 4)} Reputation, ` +
             `Costs ${getCostString(nextNfCost, nextNfRepCost)} for a ` +
             `Total of ${getCostString(totalAugCost + nextNfCost, totalRepCost + nextNfRepCost)}`)
-    if (totalCostWithNextNf > budget || (nextNfRep > augNfFaction.reputation && !augNfFaction.donationsUnlocked)) {
-      outputRows.push(`NF ${nfPurchased + 1} will be available at Money:`.padEnd(37) +
-                ` ${getCostString(totalAugCost + nextNfCost, totalRepCost + nextNfRepCost)} ` +
-                `${(totalCostWithNextNf > budget ? '✗' : '✓')} and "${augNfFaction.name}" reputation: ${formatNumberShort(nextNfRep)} ` +
+    if (totalCostWithNextNf > budget || nextNfRep > augNfFaction.reputation && !augNfFaction.donationsUnlocked) {
+      nextUpNf = `Next NF (${nfPurchased + 1}) will be available at:`.padEnd(37) +
+                ` ${getCostString(totalAugCost + nextNfCost, totalRepCost + nextNfRepCost)}  Money (` +
+                `${(totalCostWithNextNf > budget ? '✗' : '✓')}) and ${formatNumberShort(nextNfRep)} Reputation with "${augNfFaction.name}" (` +
                 (nextNfRep > augNfFaction.reputation && !augNfFaction.donationsUnlocked ? '✗' : '✓') +
-                ` (have ${formatNumberShort(augNfFaction.reputation)}` + (nextNfRep > augNfFaction.reputation
+                ` have ${formatNumberShort(augNfFaction.reputation)}` + (nextNfRep <= augNfFaction.reputation
           ? ''
-          : augNfFaction.donationsUnlocked ? ', can donate' : ', donations unavailable') + ')')
+          : augNfFaction.donationsUnlocked ? ', can donate' : ', donations unavailable') + ')'
       break // If we cannot afford the next NF, break
     }
     // Otherwise, add the next NF to our purchase order, and see if we can afford any more.
+    // TODO: Clone nf first, and possible buy from different factions as we move from ones with enough rep to ones that support donation
     const nfClone = { ...augNf }
-    nfClone.price = augNf.price * (nfCountMult ** nfPurchased)
+    nfClone.displayName += ` Level ${++nfLevel}`
+    nfClone.price = augNf.price * (nfCountMult ** nfPurchased) // Note this should be the base price, before scaling for number of augs purchased
     nfClone.reputation = nextNfRep
-    // TODO: If there is a zero-cost aug on this list, push additional NF purchases **ABOVE** it.
-    // TODO: Buy Stanek's Gift if unowned and !--ignore-stanek
-    // ns.singularity.purchaseAugmentation("Church of the Machine God", "Stanek's Gift - Genesis")
-    purchaseableAugs.push(nfClone)
+    // Note, insert all NF purchases after the current NF purchase, in front of all augs cheaper than the first NF
+    purchaseableAugs.splice(purchaseableAugs.length - augsCheaperThanNF, 0, nfClone)
     totalAugCost += nextNfCost
-    purchaseFactionDonations[augNfFaction.name] = Math.max(currentNfFactionDonation, nextNfTotalRepDonation)
+    const newDonationForRep = Math.max(currentNfFactionDonation, nextNfTotalRepDonation)
+    if (newDonationForRep > 0) purchaseFactionDonations[augNfFaction.name] = newDonationForRep
     totalRepCost = Object.values(purchaseFactionDonations).reduce((t, r) => t + r, 0)
     nfPurchased++
   }
   log(ns, `With ${formatMoney(budget)}, can afford to purchase ${nfPurchased} levels of ${strNF}. New total cost: ${getCostString(totalAugCost, totalRepCost)}`)
-  manageFilteredSubset(ns, outputRows, `(${purchaseableAugs.length - nfPurchased} Augs + ${nfPurchased} NF)`, purchaseableAugs, false)
+  // Add back free augmentations removed temporarily before inserting additional NF purchases
+  purchaseableAugs.push(...cheapAugs)
+  manageFilteredSubset(ns, outputRows, `(${purchaseableAugs.length - nfPurchased} Augs + ${nfPurchased} NF)`, purchaseableAugs, true, false, false)
+  if (nextUpAug) outputRows.push(nextUpAug)
+  if (nextUpNf) outputRows.push(nextUpNf)
 };
 
 /** @param {NS} ns
@@ -657,9 +712,9 @@ function computeAugsRepReqDonationByFaction (augmentations) {
     let reqDonation = getReqDonationForAug(aug, faction)
     // See if any other faction we're already planning to donate to offers the same augmentation, so we can avoid donating to multiple factions
     // Use the alternative faction if we're already planning on donating this much to them, or if they're closer to the donation requirement than this faction currently is
-    const fDonationsIndex = Object.keys(repCostByFaction).findIndex(f => f === faction.name)
+    const fDonationsIndex = Object.keys(repCostByFaction).findIndex(f => f == faction.name)
     const alternativeFaction = Object.keys(repCostByFaction).find((f, i) => f !== faction.name && factionData[f].augmentations.includes(aug.name) && (
-      (repCostByFaction[f] >= reqDonation && (fDonationsIndex === -1 || i < fDonationsIndex)) || // We're donating the same or more to the other faction, and were planning on donating to it before this one
+      (repCostByFaction[f] >= reqDonation && (fDonationsIndex == -1 || i < fDonationsIndex)) || // We're donating the same or more to the other faction, and were planning on donating to it before this one
             ((getReqDonationForAug(aug, f) - repCostByFaction[f]) < (reqDonation - (repCostByFaction[faction.name] || 0))))) // The amount we've committed to donating the other faction is closer to this requirement
     if (alternativeFaction) {
       log(_ns, `INFO: Using alternative faction "${alternativeFaction}" for "${aug.name}" rather than earlier faction "${faction.name}"`)
@@ -683,12 +738,14 @@ async function purchaseDesiredAugs (ns) {
     return log(ns, `ERROR: For your own protection, --purchase will not run while you are holding stocks (current stock value: ${formatMoney(stockValue)}). ` +
             'Liquidate your shares before running (run stockmaster.js --liquidate) or run this script with --ignore-stocks to override this.', printToTerminal, 'error')
   }
-  if (totalAugCost + totalRepCost > playerData.money && totalAugCost + totalRepCost > playerData.money * 1.1) { // If we're way off affording this, something is probably wrong
+  if (totalAugCost + totalRepCost > playerData.money && totalAugCost + totalRepCost > playerData.money * 1.1) // If we're way off affording this, something is probably wrong
+  {
     return log(ns, `ERROR: Purchase order total cost (${getCostString(totalAugCost, totalRepCost)})` +
             ` is far more than current player money (${formatMoney(playerData.money)}). Your money may have recently changed (It was ${formatMoney(startingPlayerMoney)} at startup), ` +
             'or there may be a bug in purchasing logic.', printToTerminal, 'error')
   }
-  if (totalAugCost + totalRepCost > playerData.money) { // If we're just a little off affording this, it could be because a bit of money was just spent? Just warn and buy what we can
+  if (totalAugCost + totalRepCost > playerData.money) // If we're just a little off affording this, it could be because a bit of money was just spent? Just warn and buy what we can
+  {
     log(ns, `WARNING: Purchase order total cost (${getCostString(totalAugCost, totalRepCost)})` +
             ` is a bit more than current player money (${formatMoney(playerData.money)}). Did something else spend some money? ` +
             `(We had ${formatMoney(startingPlayerMoney)} at startup). Will proceed with buying most of the purchase order.`, printToTerminal, 'warning')
@@ -699,10 +756,10 @@ async function purchaseDesiredAugs (ns) {
       '/Temp/facman-donate.txt', [JSON.stringify(Object.keys(purchaseFactionDonations).map(f => ({ faction: f, repDonation: purchaseFactionDonations[f] })))])) { log(ns, `SUCCESS: Donated to ${Object.keys(purchaseFactionDonations).length} factions to gain access to desired augmentations.`, printToTerminal, 'success') } else { log(ns, 'ERROR: One or more attempts to donate to factions for reputation failed. Go investigate!', printToTerminal, 'error') }
   }
   // Purchase desired augs (using a ram-dodging script of course)
-  if (purchaseableAugs.length === 0) { return log(ns, 'INFO: Cannot afford to buy any augmentations at this time.', printToTerminal) }
+  if (purchaseableAugs.length == 0) { return log(ns, 'INFO: Cannot afford to buy any augmentations at this time.', printToTerminal) }
   const purchased = await getNsDataThroughFile(ns, 'JSON.parse(ns.args[0]).reduce((total, o) => total + (ns.purchaseAugmentation(o.faction, o.augmentation) ? 1 : 0), 0)',
     '/Temp/facman-purchase-augs.txt', [JSON.stringify(purchaseableAugs.map(aug => ({ faction: aug.getFromJoined(), augmentation: aug.name })))])
-  if (purchased === purchaseableAugs.length) { log(ns, `SUCCESS: Purchased ${purchased} desired augmentations in optimal order!`, printToTerminal, 'success') } else {
+  if (purchased == purchaseableAugs.length) { log(ns, `SUCCESS: Purchased ${purchased} desired augmentations in optimal order!`, printToTerminal, 'success') } else {
     log(ns, `ERROR: We were only able to purchase ${purchased} of our ${purchaseableAugs.length} augmentations. ` +
             `Expected cost was ${getCostString(totalAugCost, totalRepCost)}. Player money was ${formatMoney(playerData.money)} right before purchase, ` +
             `is now ${formatMoney((await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')).money)}`, printToTerminal, 'error')
@@ -713,31 +770,32 @@ async function purchaseDesiredAugs (ns) {
 function displayJoinedFactionSummary (ns) {
   const joinedFactions = Object.values(factionData).filter(f => f.joined)
   let summary = `${joinedFactions.length} Joined Factions:`
-  const noaugs = joinedFactions.filter(f => f.unownedAugmentations().length === 0)
-  if (noaugs.length > 0) { summary += `\n  ${noaugs.length} joined factions have no unowned augs remaining: "${noaugs.map(f => f.name).join('", "')}"` }
-  for (const faction of joinedFactions.filter(f => !noaugs.includes(f))) { summary += `\n  ${faction.name}: ${faction.unownedAugmentations().length} augs remaining (${faction.unownedAugmentations().join(', ')})` }
+  const noaugs = joinedFactions.filter(f => f.unownedAugmentations().length == 0)
+  if (noaugs.length > 0) { summary += `\n  ${noaugs.length} joined factions have no unowned augs remaining: "${noaugs.map(f => f.name).join('", "')}"` }
+  for (const faction of joinedFactions.filter(f => !noaugs.includes(f))) { summary += `\n  ${faction.name}: ${faction.unownedAugmentations().length} augs remaining (${faction.unownedAugmentations().join(', ')})` }
   log(ns, summary, printToTerminal)
 }
 
 /** @param {NS} ns **/
 function displayFactionSummary (ns, sortBy, unique, overrideFinishedFactions, excludedStats) {
-  const noAugs = Object.values(factionData).filter(f => f.unownedAugmentations().length === 0)
-  if (noAugs.length > 0) { log(ns, `${noAugs.length} factions have no augmentations to purchase (excluding NF): ${JSON.stringify(noAugs.map(a => a.name))}`, printToTerminal) }
+  const noAugs = Object.values(factionData).filter(f => f.unownedAugmentations().length == 0)
+  let summary = ''
+  if (noAugs.length > 0) { summary += `${noAugs.length} factions have no augmentations to purchase (excluding NF): ${JSON.stringify(noAugs.map(a => a.name))}\n` }
   let summaryFactions = Object.values(factionData).filter(f => f.unownedAugmentations().length > 0 && !overrideFinishedFactions.includes(f.name))
-  if (summaryFactions.length === 0) return
+  if (summaryFactions.length == 0) return
   // Apply any override faction options
   joinedFactions.push(...overrideFinishedFactions.filter(f => !joinedFactions.includes(f)))
   for (const faction of overrideFinishedFactions) { simulatedOwnedAugmentations.push(...factionData[faction]?.unownedAugmentations() || []) }
   // Grab disctinct augmentations stats
   const relevantAugStats = allAugStats.filter(s => !excludedStats.find(excl => s.includes(excl)) &&
         undefined !== summaryFactions.find(f => f.unownedAugmentations().find(aug => (augmentationData[aug].stats[s] || 1) !== 1)))
-  let summary = `${summaryFactions.length} factions with augmentations (sorted by total ${sortBy}):`
+  summary += `${summaryFactions.length} factions with augmentations (✓=Joined ✉=Invited ✗=Locked, sorted by total ${sortBy}):`
   // Creates the table header row
-  const getHeaderRow = countName => `\n   Faction Name ${countName.padStart(9)} / Total Augs ` + relevantAugStats.map(key => shorten(key).padStart(4)).join(' ')
+  const getHeaderRow = countName => `\n   Faction Name ${countName.padStart(9)} / Total Augs ` + relevantAugStats.map(key => shorten(key).padStart(4)).join(' ')
   // Creates the string to display a single faction's stats in the table
   const getFactionSummary = faction => {
     const totalMults = faction.totalUnownedMults()
-    return `\n ${faction.joined ? '✓' : faction.invited ? '✉' : '✗'} ${faction.name} `.padEnd(32) + // TODO: Display faction rep / max aug rep
+    return `\n ${faction.joined ? '✓' : faction.invited ? '✉' : '✗'} ${faction.name} `.padEnd(32) + // TODO: Display faction rep / max aug rep
             `${String(faction.unownedAugmentations().length).padStart(2)} / ${String(faction.augmentations.length).padEnd(2)} ` +
             relevantAugStats.map(key => (totalMults[key] === undefined ? '-' : totalMults[key].toPrecision(3)).padStart(Math.max(shorten(key).length, 4))).join(' ')
   }
@@ -761,10 +819,9 @@ function displayFactionSummary (ns, sortBy, unique, overrideFinishedFactions, ex
     ? `\n---------------------------  (Factions below offer no augs that contribute to '${sortBy}')`
     : ''
   summary += getHeaderRow(unique ? 'New' : 'Unowned')
-  if (!unique) { // Each faction is summarized based on all the unowned augs it has, regardless of whether a faction higher up the list has the same augs
-    for (const faction of summaryFactions.sort(sortFunction)) {
-      summary += getSeparator(faction) + getFactionSummary(faction)
-    }
+  if (!unique) // Each faction is summarized based on all the unowned augs it has, regardless of whether a faction higher up the list has the same augs
+  {
+    for (const faction of summaryFactions.sort(sortFunction)) { summary += getSeparator(faction) + getFactionSummary(faction) }
   } else { // Each faction's stats computed as though the faction sorted above it was joined and bought out first, so only showing new augs
     const actualOwnedAugs = simulatedOwnedAugmentations
     const actualUnjoinedFactions = summaryFactions
@@ -778,5 +835,5 @@ function displayFactionSummary (ns, sortBy, unique, overrideFinishedFactions, ex
     simulatedOwnedAugmentations = actualOwnedAugs // Restore the original lists once the simulation is complete
     summaryFactions = actualUnjoinedFactions
   }
-  log(ns, summary, printToTerminal)
+  log(ns, 'INFO: The following is a summary of remaining augmentations available from each faction:\n' + summary, printToTerminal)
 }
