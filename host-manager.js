@@ -77,7 +77,7 @@ export async function main(ns) {
             `early on, and less later on. Experimental and not tested by me. Have fun!`);
     else
         log(ns, `INFO: --reserve-percent is set to ${pctReservedMoney * 100}%: ` +
-            `This means we will spend more than ${((1 - pctReservedMoney) * 100).toFixed(1)}% of current Money on a new server.`);
+            `This means we will spend no more than ${((1 - pctReservedMoney) * 100).toFixed(1)}% of current Money on a new server.`);
     // Start the main loop (or run once)
     if (!keepRunning)
         log(ns, `host-manager will run once. Run with argument "-c" to run continuously.`)
@@ -101,11 +101,24 @@ async function tryToBuyBestServerPossible(ns) {
     // Gether the list of all purchased servers.
     const purchasedServers = await getNsDataThroughFile(ns, 'ns.getPurchasedServers()', '/Temp/getPurchasedServers.txt');
     // Scan the set of all servers on the network that we own (or rooted) to get a sense of current RAM utilization
-    const rootedServers = scanAllServers(ns).filter(s => ns.hasRootAccess(s));
+    let rootedServers = scanAllServers(ns).filter(s => ns.hasRootAccess(s));
+
+    // If some of the servers are hacknet servers, and they aren't being used for scripts, ignore the RAM they have available
+    // with the assumption that these are reserved for generating hashes
+    const likelyHacknet = rootedServers.filter(s => s.startsWith("hacknet-node-"));
+    if (likelyHacknet.length > 0) {
+        const totalHacknetUsedRam = likelyHacknet.reduce((t, s) => t + ns.getServerUsedRam(s), 0);
+        if (totalHacknetUsedRam == 0) {
+            rootedServers = rootedServers.filter(s => !likelyHacknet.includes(s));
+            log(ns, `Removing ${likelyHacknet.length} hacknet servers from RAM statistics since they are not being utilized.`)
+        } else if (!keepRunning)
+            log(ns, `We are currently using ${formatRam(totalHacknetUsedRam)} of hacknet RAM, so including hacknet in our utilization stats.`)
+    }
+
     const totalMaxRam = rootedServers.reduce((t, s) => t + ns.getServerMaxRam(s), 0);
     const totalUsedRam = rootedServers.reduce((t, s) => t + ns.getServerUsedRam(s), 0);
     const utilizationRate = totalUsedRam / totalMaxRam;
-    setStatus(ns, `Using ${Math.round(totalUsedRam).toLocaleString()}/${formatRam(totalMaxRam)} (` +
+    setStatus(ns, `Using ${Math.round(totalUsedRam).toLocaleString('en')}/${formatRam(totalMaxRam)} (` +
         `${(utilizationRate * 100).toFixed(1)}%) across ${rootedServers.length} servers ` +
         `(Triggers at ${options['utilization-trigger'] * 100}%, ${purchasedServers.length} bought so far)`);
 

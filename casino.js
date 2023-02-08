@@ -44,7 +44,7 @@ export async function main(ns) {
 	// Step 1: Go to Aevum if we aren't already there. (Must be done manually if you don't have SF4)
 	if (ns.getPlayer().city != "Aevum") {
 		try {
-			if (ns.getPlayer().money < 200000 || !(await getNsDataThroughFile(ns, 'ns.travelToCity(ns.args[0])', '/Temp/travelToCity.txt', ["Aevum"])))
+			if (ns.getPlayer().money < 200000 || !(await getNsDataThroughFile(ns, 'ns.singularity.travelToCity(ns.args[0])', '/Temp/travelToCity.txt', ["Aevum"])))
 				return tailAndLog(ns, "ERROR: Sorry, you need at least 200k to travel to the casino.");
 		} catch (err) {
 			return tailAndLog(ns, "ERROR: You must manually travel to to Aevum to use this script until you get SF4");
@@ -58,6 +58,8 @@ export async function main(ns) {
 
 	// Find the button used to save the game
 	const btnSaveGame = await findRetry(ns, "//button[@aria-label = 'save game']");
+	if (!btnSaveGame)
+		return tailAndLog(ns, "ERROR: Sorry, couldn't find the Overview Save (💾) button. Is your \"Overview\" panel collapsed or modded?");
 	let inputWager, btnStartGame;
 
 	// Step 2: Try to navigate to the blackjack game until successful, in case something repeatedly steals focus
@@ -77,7 +79,7 @@ export async function main(ns) {
 				await click(await findRetry(ns, "//div[(@role = 'button') and (contains(., 'City'))]"));
 				await click(await findRetry(ns, "//span[@aria-label = 'Iker Molina Casino']"));
 			} catch { // Use SF4 as a fallback, it's more reliable.
-				try { await getNsDataThroughFile(ns, 'ns.goToLocation(ns.args[0])', '/Temp/goToLocation.txt', ["Iker Molina Casino"]); }
+				try { await getNsDataThroughFile(ns, 'ns.singularity.goToLocation(ns.args[0])', '/Temp/goToLocation.txt', ["Iker Molina Casino"]); }
 				catch { return tailAndLog(ns, "ERROR: Failed to travel to the casino both using UI navigation and using SF4 as a fall-back."); }
 			}
 			// Step 2.3: Try to start the blackjack game
@@ -112,7 +114,7 @@ export async function main(ns) {
 						log(ns, "ERROR: It looks like something stole focus while we were trying to automate the casino. Trying again.");
 						continue; // Loop back to start and try again
 					}
-					await ns.write(ran_flag, true, "w"); // Write a flag other scripts can check for indicating we think we've been kicked out of the casino.
+					await ns.write(ran_flag, "True", "w"); // Write a flag other scripts can check for indicating we think we've been kicked out of the casino.
 					return log(ns, "INFO: We appear to already have been previously kicked out of the casino.", true);
 				}
 				// Step 2.5.2: Kill all other scripts if enabled (note, we assume that if the temp folder is empty, they're already killed and this is a reload)
@@ -133,9 +135,9 @@ export async function main(ns) {
 		return log(ns, "WARNING: Whoops, we have no money to bet! Kill whatever's spending it and try again later.", true, 'warning');
 
 	// Step 3: Save the fact that this script is now running, so that future reloads start this script back up immediately.
-	if (saveSleepTime) await ns.asleep(saveSleepTime); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
+	if (saveSleepTime) await ns.sleep(saveSleepTime); // Anecdotally, some users report the first save is "stale" (doesn't include casino.js running). Maybe this delay helps?
 	await click(btnSaveGame);
-	if (saveSleepTime) await ns.asleep(saveSleepTime);
+	if (saveSleepTime) await ns.sleep(saveSleepTime);
 
 	// Step 4: Play until we lose
 	while (true) {
@@ -155,7 +157,7 @@ export async function main(ns) {
 				const txtCount = await findRetry(ns, "//p[contains(text(), 'Count:')]", true, 20);
 				if (!txtCount) { // If we can't find the count, we've either been kicked out, or maybe routed to another screen.
 					return await checkForFocusScreen() /* Detect the case where we started working/training */ ?
-						log("ERROR: It looks like something stole focus while we were trying to automate the casino. Please try again.", true) :
+						log(ns, "ERROR: It looks like something stole focus while we were trying to automate the casino. Please try again.", true) :
 						await onCompletion(ns); // Otherwise, assume we've been kicked out of the casino for having stolen the max 10b
 				}
 				const allCounts = txtCount.querySelectorAll('span');
@@ -163,13 +165,13 @@ export async function main(ns) {
 				const shouldHit = options['use-basic-strategy'] ? highCount < 17 : shouldHitAdvanced(ns, txtCount);
 				if (options['enable-logging']) log(ns, `INFO: Count is ${highCount}, we will ${shouldHit ? 'Hit' : 'Stay'}`);
 				await click(shouldHit ? btnHit : btnStay);
-				await ns.sleep(1); // Yeild for an instant so the UI can update and process events
+				await ns.sleep(1); // Yield for an instant so the UI can update and process events
 			}
 		} while (won === null);
 		if (won === null) continue; // Only possible if we tied and broke out early. Start a new hand.
 		if (!won) return await reload(ns); // Reload if we lost
 		await click(btnSaveGame); // Save if we won
-		if (saveSleepTime) await ns.asleep(saveSleepTime);
+		if (saveSleepTime) await ns.sleep(saveSleepTime);
 	}
 }
 
@@ -178,9 +180,9 @@ export async function main(ns) {
  * @param {NS} ns */
 async function reload(ns) {
 	eval("window").onbeforeunload = null; // Disable the unsaved changes warning before reloading
-	await ns.sleep(options['save-sleep-time']); // Yeild execution for an instant incase the game needs to finish a save or something
+	await ns.sleep(options['save-sleep-time']); // Yield execution for an instant incase the game needs to finish a save or something
 	location.reload(); // Force refresh the page without saving           
-	await ns.asleep(10000); // Keep the script alive to be safe. Presumably the page reloads before this completes.
+	await ns.sleep(10000); // Keep the script alive to be safe. Presumably the page reloads before this completes.
 }
 
 /** @param {NS} ns 
@@ -212,7 +214,7 @@ async function killAllOtherScripts(ns, removeRemoteFiles) {
 /** @param {NS} ns 
  *  Run when we can no longer gamble at the casino (presumably because we've been kicked out) **/
 async function onCompletion(ns) {
-	await ns.write(ran_flag, true, "w"); // Write an file indicating we think we've been kicked out of the casino.
+	await ns.write(ran_flag, "True", "w"); // Write an file indicating we think we've been kicked out of the casino.
 	log(ns, "SUCCESS: We've been kicked out of the casino.", true);
 
 	// Run the completion script before shutting down    
@@ -228,11 +230,11 @@ async function onCompletion(ns) {
 // Some DOM helpers (partial credit to @ShamesBond)
 async function click(elem) {
 	await elem[Object.keys(elem)[1]].onClick({ isTrusted: true });
-	if (options['click-sleep-time']) await _ns.asleep(options['click-sleep-time']);
+	if (options['click-sleep-time']) await _ns.sleep(options['click-sleep-time']);
 }
 async function setText(input, text) {
 	await input[Object.keys(input)[1]].onChange({ isTrusted: true, target: { value: text } });
-	if (options['click-sleep-time']) await _ns.asleep(options['click-sleep-time']);
+	if (options['click-sleep-time']) await _ns.sleep(options['click-sleep-time']);
 }
 function find(xpath) { return doc.evaluate(xpath, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; }
 async function findRetry(ns, xpath, expectFailure = false, retries = null) {

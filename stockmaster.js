@@ -1,13 +1,13 @@
 import {
     instanceCount, getConfiguration, getNsDataThroughFile, runCommand, getActiveSourceFiles, tryGetBitNodeMultipliers,
-    formatMoney, formatNumberShort, formatDuration
+    formatMoney, formatNumberShort, formatDuration, getStockSymbols
 } from './helpers.js'
 
 let disableShorts = false;
 let commission = 100000; // Buy/sell commission. Expected profit must exceed this to buy anything.
 let totalProfit = 0.0; // We can keep track of how much we've earned since start.
 let lastLog = ""; // We update faster than the stock-market ticks, but we don't log anything unless there's been a change
-let allStockSymbols = []; // Stores the set of all symbols collected at start
+let allStockSymbols = null; // Stores the set of all symbols collected at start
 let mock = false; // If set to true, will "mock" buy/sell but not actually buy/sell anythingorecast
 let noisy = false; // If set to true, tprints and announces each time stocks are bought/sold
 let dictSourceFiles; // Populated at init, a dictionary of source-files the user has access to, and their level
@@ -36,7 +36,7 @@ const argsSchema = [
     ['l', false], // Stop any other running stockmaster.js instances and sell all stocks
     ['liquidate', false], // Long-form alias for the above flag.
     ['mock', false], // If set to true, will "mock" buy/sell but not actually buy/sell anything
-    ['noisy', false], // If set to true, tprints and announces each time stocks are bought/soldgetHostnames
+    ['noisy', false], // If set to true, tprints and announces each time stocks are bought/sold
     ['disable-shorts', false], // If set to true, will not short any stocks. Will be set depending on having SF8.2 by default.
     ['reserve', null], // A fixed amount of money to not spend
     ['fracB', 0.4], // Fraction of assets to have as liquid before we consider buying more stock
@@ -73,9 +73,9 @@ export async function main(ns) {
 
     // If given the "liquidate" command, try to kill any versions of this script trading in stocks
     // NOTE: We must do this immediately before we start resetting / overwriting global state below (which is shared between script instances)
-    let player = ns.getPlayer();
+    const hasTixApiAccess = await getNsDataThroughFile(ns, 'ns.stock.hasTIXAPIAccess()', '/Temp/hasTIX.txt');
     if (runOptions.l || runOptions.liquidate) {
-        if (!player.hasTixApiAccess) return log(ns, 'ERROR: Cannot liquidate stocks because we do not have Tix Api Access', true, 'error');
+        if (!hasTixApiAccess) return log(ns, 'ERROR: Cannot liquidate stocks because we do not have Tix Api Access', true, 'error');
         log(ns, 'INFO: Killing any other stockmaster processes...', false, 'info');
         await runCommand(ns, `ns.ps().filter(proc => proc.filename == '${ns.getScriptName()}' && !proc.args.includes('-l') && !proc.args.includes('--liquidate'))` +
             `.forEach(proc => ns.kill(proc.pid))`, '/Temp/kill-stockmarket-scripts.js');
@@ -105,8 +105,9 @@ export async function main(ns) {
     // Other global values must be reset at start lest they be left in memory from a prior run
     lastTick = 0, totalProfit = 0, lastLog = "", marketCycleDetected = false, detectedCycleTick = 0, inversionAgreementThreshold = 6;
     let myStocks = [], allStocks = [];
+    let player = await getPlayerInfo(ns);
 
-    if (!player.hasTixApiAccess) { // You cannot use the stockmaster until you have API access
+    if (!hasTixApiAccess) { // You cannot use the stockmaster until you have API access
         if (options['disable-purchase-tix-api'])
             return log(ns, "ERROR: You do not have stock market API access, and --disable-purchase-tix-api is set.", true);
         let success = false;
@@ -116,7 +117,7 @@ export async function main(ns) {
             await ns.sleep(sleepInterval);
             try {
                 const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
-                success = await tryGetStockMarketAccess(ns, player = ns.getPlayer(), player.money - reserve);
+                success = await tryGetStockMarketAccess(ns, player.money - reserve);
             } catch (err) {
                 log(ns, `WARNING: stockmaster.js Caught (and suppressed) an unexpected error while waiting to buy stock market access:\n` +
                     (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
@@ -130,7 +131,7 @@ export async function main(ns) {
         disableShorts = true;
     }
 
-    if (allStockSymbols.length == 0) allStockSymbols = await getAllStockSymbols(ns);
+    allStockSymbols = await getStockSymbols(ns);
     allStocks = await initAllStocks(ns);
 
     let bitnodeMults;
@@ -150,12 +151,14 @@ export async function main(ns) {
         `This script is designed to buy stocks that are most likely to surpass that loss and turn a profit, but it will take a few minutes to see the progress.\n\n` +
         `If you choose to stop the script, make sure you SELL all your stocks (can go 'run ${ns.getScriptName()} --liquidate') to get your money back.\n\nGood luck!\n~ Insight\n\n`)
 
+    let pre4s = true;
     while (true) {
         try {
-            const playerStats = ns.getPlayer();
+            const playerStats = await getPlayerInfo(ns);
             const reserve = options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0);
-            const pre4s = !playerStats.has4SDataTixApi;
-            const holdings = await refresh(ns, playerStats.has4SDataTixApi, allStocks, myStocks); // Returns total stock value
+            // Check whether we have 4s access yes (once we do, we can stop checking)
+            if (pre4s) pre4s = !(await checkAccess(ns, 'has4SDataTIXAPI'));
+            const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
             const corpus = holdings + playerStats.money; // Corpus means total stocks + cash
             const maxHoldings = (1 - fracH) * corpus; // The largest value of stock we could hold without violiating fracH (Fraction to keep as cash)
             if (pre4s && !mock && await tryGet4SApi(ns, playerStats, bitnodeMults, corpus * (options['buy-4s-budget'] - fracH) - reserve))
@@ -222,7 +225,7 @@ export async function main(ns) {
                         log(ns, (owned ? '' : `We currently have ${formatNumberShort(stk.ownedShares(), 3, 1)} shares in ${stk.sym} valued at ${formatMoney(stk.positionValue())} ` +
                             `(${(100 * stk.positionValue() / maxHoldings).toFixed(1)}% of corpus, capped at ${(diversification * 100).toFixed(1)}% by --diversification).\n`) +
                             `Despite attractive ER of ${formatBP(stk.absReturn())}, ${owned ? 'more ' : ''}${stk.sym} was not bought. ` +
-                            `\nBudget: ${formatMoney(budget)} can only buy ${numShares.toLocaleString()} ${owned ? 'more ' : ''}shares @ ${formatMoney(purchasePrice)}. ` +
+                            `\nBudget: ${formatMoney(budget)} can only buy ${numShares.toLocaleString('en')} ${owned ? 'more ' : ''}shares @ ${formatMoney(purchasePrice)}. ` +
                             `\nGiven an estimated ${marketCycleLength - estTick} ticks left in market cycle, less ${stk.timeToCoverTheSpread().toFixed(1)} ticks to cover the spread (${(stk.spread_pct * 100).toFixed(2)}%), ` +
                             `remaining ${ticksBeforeCycleEnd.toFixed(1)} ticks would only generate ${formatMoney(estEndOfCycleValue)}, which is less than 2x commission (${formatMoney(2 * commission, 3)})`);
                     else
@@ -237,19 +240,26 @@ export async function main(ns) {
     }
 }
 
-/** @param {NS} ns
- * Ram-dodging helper to get an array of all stock symbols in the game */
-export async function getAllStockSymbols(ns) {
-    return await getNsDataThroughFile(ns, 'ns.stock.getSymbols()', '/Temp/stock-symbols.txt');
+/** Ram-dodge getting updated player info. Note that this is the only async routine called in the main loop.
+ * If latency or ram instability is an issue, you may wish to try uncommenting the direct request.
+ * @param {NS} ns
+ * @returns {Promise<Player>} */
+async function getPlayerInfo(ns) {
+    return await getNsDataThroughFile(ns, `ns.getPlayer()`, '/Temp/player-info.txt');
 }
 
 /* A sorting function to put stocks in the order we should prioritize investing in them */
 let purchaseOrder = (a, b) => (Math.ceil(a.timeToCoverTheSpread()) - Math.ceil(b.timeToCoverTheSpread())) || (b.absReturn() - a.absReturn());
 
-/* Generic helper for dodging the hefty RAM requirements of stock functions by spawning a temporary script to collect info for us.
- Relies on the global variable 'allStockSymbols' being populated. */
-let getStockInfoDict = async (ns, stockFunction) => await getNsDataThroughFile(ns,
-    `Object.fromEntries(ns.args.map(sym => [sym, ns.stock.${stockFunction}(sym)]))`, `/Temp/stock-${stockFunction}.txt`, allStockSymbols);
+/** @param {NS} ns
+ * Generic helper for dodging the hefty RAM requirements of stock functions by spawning a temporary script to collect info for us. */
+async function getStockInfoDict(ns, stockFunction) {
+    allStockSymbols ??= await getStockSymbols(ns);
+    if (allStockSymbols == null) throw new Error(`No WSE API Access yet, this call to ns.stock.${stockFunction} is premature.`);
+    return await getNsDataThroughFile(ns,
+        `Object.fromEntries(ns.args.map(sym => [sym, ns.stock.${stockFunction}(sym)]))`,
+        `/Temp/stock-${stockFunction}.txt`, allStockSymbols);
+};
 
 /** @param {NS} ns **/
 async function initAllStocks(ns) {
@@ -433,9 +443,9 @@ let launchSummaryTail = async ns => {
 }
 
 // Ram-dodging helpers that spawn temporary scripts to buy/sell rather than pay 2.5GB ram per variant
-let buyStockWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'buy'); // ns.stock.buy(sym, numShares);
-let buyShortWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'short'); // ns.stock.short(sym, numShares);
-let sellStockWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'sell'); // ns.stock.sell(sym, numShares);
+let buyStockWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'buyStock'); // ns.stock.buyStock(sym, numShares);
+let buyShortWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'buyShort'); // ns.stock.buyShort(sym, numShares);
+let sellStockWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'sellStock'); // ns.stock.sellStock(sym, numShares);
 let sellShortWrapper = async (ns, sym, numShares) => await transactStock(ns, sym, numShares, 'sellShort'); // ns.stock.sellShort(sym, numShares);
 let transactStock = async (ns, sym, numShares, action) =>
     await getNsDataThroughFile(ns, `ns.stock.${action}(ns.args[0], ns.args[1])`, `/Temp/stock-${action}.txt`, [sym, numShares]);
@@ -445,17 +455,17 @@ let transactStock = async (ns, sym, numShares, action) =>
 async function doBuy(ns, stk, sharesToBuy) {
     // We include -2*commission in the "holdings value" of our stock, but if we make repeated purchases of the same stock, we have to track
     // the additional commission somewhere. So only subtract it from our running profit if this isn't our first purchase of this symbol
+    let price = 0; //price wasn't defined yet.
     if (stk.owned())
         totalProfit -= commission;
     let long = stk.bullish();
     let expectedPrice = long ? stk.ask_price : stk.bid_price; // Depends on whether we will be buying a long or short position
-    let price;
     log(ns, `INFO: ${long ? 'Buying  ' : 'Shorting'} ${formatNumberShort(sharesToBuy, 3, 3).padStart(5)} (` +
         `${stk.maxShares == sharesToBuy + stk.ownedShares() ? '@max shares' : `${formatNumberShort(sharesToBuy + stk.ownedShares(), 3, 3).padStart(5)}/${formatNumberShort(stk.maxShares, 3, 3).padStart(5)}`}) ` +
         `${stk.sym.padEnd(5)} @ ${formatMoney(expectedPrice).padStart(9)} for ${formatMoney(sharesToBuy * expectedPrice).padStart(9)} (Spread:${(stk.spread_pct * 100).toFixed(2)}% ` +
         `ER:${formatBP(stk.expectedReturn()).padStart(8)}) Ticks to Profit: ${stk.timeToCoverTheSpread().toFixed(2)}`, noisy, 'info');
     try {
-        price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buy' : 'short'));
+        price = mock ? expectedPrice : Number(await transactStock(ns, stk.sym, sharesToBuy, long ? 'buyStock' : 'buyShort'));
     } catch (err) {
         if (long) throw err;
         disableShorts = true;
@@ -464,10 +474,11 @@ async function doBuy(ns, stk, sharesToBuy) {
     }
     // The rest of this work is for troubleshooting / mock-mode purposes
     if (price == 0) {
-        if (ns.getPlayer().money < sharesToBuy * expectedPrice)
-            log(ns, `WARN: Failed to ${long ? 'buy' : 'short'} ${stk.sym} because money just recently dropped to ${formatMoney(ns.getPlayer().money)} and we can no longer afford it.`, noisy);
+        const playerMoney = (await getPlayerInfo(ns)).money;
+        if (playerMoney < sharesToBuy * expectedPrice)
+            log(ns, `WARN: Failed to ${long ? 'buy' : 'short'} ${stk.sym} because money just recently dropped to ${formatMoney(playerMoney)} and we can no longer afford it.`, noisy);
         else
-            log(ns, `ERROR: Failed to ${long ? 'buy' : 'short'} ${stk.sym} @ ${formatMoney(expectedPrice)} (0 was returned) despite having ${formatMoney(ns.getPlayer().money)}.`, true, 'error');
+            log(ns, `ERROR: Failed to ${long ? 'buy' : 'short'} ${stk.sym} @ ${formatMoney(expectedPrice)} (0 was returned) despite having ${formatMoney(playerMoney)}.`, true, 'error');
         return 0;
     } else if (price != expectedPrice) {
         log(ns, `WARNING: ${long ? 'Bought' : 'Shorted'} ${stk.sym} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
@@ -487,7 +498,7 @@ async function doSellAll(ns, stk) {
         log(ns, `ERROR: Somehow ended up both ${stk.sharesShort} short and ${stk.sharesLong} long on ${stk.sym}`, true, 'error');
     let expectedPrice = long ? stk.bid_price : stk.ask_price; // Depends on whether we will be selling a long or short position
     let sharesSold = long ? stk.sharesLong : stk.sharesShort;
-    let price = mock ? expectedPrice : await transactStock(ns, stk.sym, sharesSold, long ? 'sell' : 'sellShort');
+    let price = mock ? expectedPrice : await transactStock(ns, stk.sym, sharesSold, long ? 'sellStock' : 'sellShort');
     const profit = (long ? stk.sharesLong * (price - stk.boughtPrice) : stk.sharesShort * (stk.boughtPriceShort - price)) - 2 * commission;
     log(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: Sold all ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ${stk.sym.padEnd(5)} ${long ? ' long' : 'short'} positions ` +
         `@ ${formatMoney(price).padStart(9)} for a ` + (profit > 0 ? `PROFIT of ${formatMoney(profit).padStart(9)}` : ` LOSS  of ${formatMoney(-profit).padStart(9)}`) + ` after ${stk.ticksHeld} ticks`,
@@ -532,7 +543,8 @@ function doStatusUpdate(ns, stocks, myStocks, hudElement = null) {
 
 /** @param {NS} ns **/
 async function liquidate(ns) {
-    if (allStockSymbols.length == 0) allStockSymbols = await getAllStockSymbols(ns); // If the global property allStockSymbols hasn't been initialized, do so now
+    allStockSymbols ??= await getStockSymbols(ns);
+    if (allStockSymbols == null) return; // Nothing to liquidate, no API Access
     let totalStocks = 0, totalSharesLong = 0, totalSharesShort = 0, totalRevenue = 0;
     const dictPositions = mock ? null : await getStockInfoDict(ns, 'getPosition');
     for (const sym of allStockSymbols) {
@@ -542,30 +554,33 @@ async function liquidate(ns) {
         if (sharesLong > 0) totalRevenue += (await sellStockWrapper(ns, sym, sharesLong)) * sharesLong - commission;
         if (sharesShort > 0) totalRevenue += (2 * avgShortCost - (await sellShortWrapper(ns, sym, sharesShort))) * sharesShort - commission;
     }
-    log(ns, `Sold ${totalSharesLong.toLocaleString()} long shares and ${totalSharesShort.toLocaleString()} short shares ` +
+    log(ns, `Sold ${totalSharesLong.toLocaleString('en')} long shares and ${totalSharesShort.toLocaleString('en')} short shares ` +
         `in ${totalStocks} stocks for ${formatMoney(totalRevenue, 3)}`, true, 'success');
 }
 
 /** @param {NS} ns **/
 /** @param {Player} playerStats **/
 async function tryGet4SApi(ns, playerStats, bitnodeMults, budget) {
-    if (playerStats.has4SDataTixApi) return false; // Only return true if we just bought it
+    if (await checkAccess(ns, 'has4SDataTIXAPI')) return false; // Only return true if we just bought it
     const cost4sData = 1E9 * bitnodeMults.FourSigmaMarketDataCost;
     const cost4sApi = 25E9 * bitnodeMults.FourSigmaMarketDataApiCost;
-    const totalCost = (playerStats.has4SData ? 0 : cost4sData) + cost4sApi;
+    const has4S = await checkAccess(ns, 'has4SData');
+    const totalCost = (has4S ? 0 : cost4sData) + cost4sApi;
     // Liquidate shares if it would allow us to afford 4S API data
     if (totalCost > budget) /* Need to reserve some money to invest */
         return false;
     if (playerStats.money < totalCost)
         await liquidate(ns);
-    if (!playerStats.has4SData) {
-        if (await getNsDataThroughFile(ns, 'ns.stock.purchase4SMarketData()', '/Temp/purchase-4s.txt'))
-            log(ns, `SUCCESS: Purchased 4SMarketData for ${formatMoney(cost4sData)} (At ${formatDuration(playerStats.playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
+    if (!has4S) {
+        if (await tryBuy(ns, 'purchase4SMarketData'))
+            log(ns, `SUCCESS: Purchased 4SMarketData for ${formatMoney(cost4sData)} ` +
+                `(At ${formatDuration(playerStats.playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
         else
             log(ns, 'ERROR attempting to purchase 4SMarketData!', false, 'error');
     }
-    if (await getNsDataThroughFile(ns, 'ns.stock.purchase4SMarketDataTixApi()', '/Temp/purchase-4s-api.txt')) {
-        log(ns, `SUCCESS: Purchased 4SMarketDataTixApi for ${formatMoney(cost4sApi)} (At ${formatDuration(playerStats.playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
+    if (await tryBuy(ns, 'purchase4SMarketDataTixApi')) {
+        log(ns, `SUCCESS: Purchased 4SMarketDataTixApi for ${formatMoney(cost4sApi)} ` +
+            `(At ${formatDuration(playerStats.playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
         return true;
     } else {
         log(ns, 'ERROR attempting to purchase 4SMarketDataTixApi!', false, 'error');
@@ -578,22 +593,40 @@ async function tryGet4SApi(ns, playerStats, bitnodeMults, budget) {
     return false;
 }
 
-/** @param {NS} ns **/
-/** @param {Player} playerStats **/
-async function tryGetStockMarketAccess(ns, playerStats, budget) {
-    if (playerStats.hasTixApiAccess) return true; // Already have access
+/** @param {NS} ns 
+ * @param {"hasWSEAccount"|"hasTIXAPIAccess"|"has4SData"|"has4SDataTIXAPI"} stockFn
+ * Helper to check for one of the stock access functions */
+async function checkAccess(ns, stockFn) {
+    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`, `/Temp/stock-${stockFn}.txt`)
+}
+
+/** @param {NS} ns 
+ * @param {"purchaseWseAccount"|"purchaseTixApi"|"purchase4SMarketData"|"purchase4SMarketDataTixApi"} stockFn
+ * Helper to try and buy a stock access. Yes, the code is the same as above, but I wanted to be explicit. */
+async function tryBuy(ns, stockFn) {
+    return await getNsDataThroughFile(ns, `ns.stock.${stockFn}()`, `/Temp/stock-${stockFn}.txt`)
+}
+
+/** @param {NS} ns 
+ * @param {number} budget - The amount we are willing to spend on WSE and API access
+ * Tries to purchase access to the stock market **/
+async function tryGetStockMarketAccess(ns, budget) {
+    if (await checkAccess(ns, 'hasTIXAPIAccess')) return true; // Already have access
     const costWseAccount = 200E6;
     const costTixApi = 5E9;
-    const totalCost = (playerStats.hasWseAccount ? 0 : costWseAccount) + costTixApi;
+    const hasWSE = await checkAccess(ns, 'hasWSEAccount');
+    const totalCost = (hasWSE ? 0 : costWseAccount) + costTixApi;
     if (totalCost > budget) return false;
-    if (!playerStats.hasWseAccount) {
-        if (await getNsDataThroughFile(ns, 'ns.stock.purchaseWseAccount()', '/Temp/purchase-wse.txt'))
-            log(ns, `SUCCESS: Purchased a WSE (stockmarket) account for ${formatMoney(costWseAccount)} (At ${formatDuration(playerStats.playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
+    if (!hasWSE) {
+        if (await tryBuy(ns, 'purchaseWseAccount'))
+            log(ns, `SUCCESS: Purchased a WSE (stockmarket) account for ${formatMoney(costWseAccount)} ` +
+                `(At ${formatDuration((await getPlayerInfo(ns)).playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
         else
             log(ns, 'ERROR attempting to purchase WSE account!', false, 'error');
     }
-    if (await getNsDataThroughFile(ns, 'ns.stock.purchaseTixApi()', '/Temp/purchase-tix-api.txt')) {
-        log(ns, `SUCCESS: Purchased Tix (stockmarket) Api access for ${formatMoney(costTixApi)} (At ${formatDuration(playerStats.playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
+    if (await tryBuy(ns, 'purchaseTixApi')) {
+        log(ns, `SUCCESS: Purchased Tix (stockmarket) Api access for ${formatMoney(costTixApi)} ` +
+            `(At ${formatDuration((await getPlayerInfo(ns)).playtimeSinceLastBitnode)} into BitNode)`, true, 'success');
         return true;
     } else
         log(ns, 'ERROR attempting to purchase Tix Api!', false, 'error');
