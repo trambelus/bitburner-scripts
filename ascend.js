@@ -1,7 +1,4 @@
-import { getFilePath, runCommand, waitForProcessToComplete, getNsDataThroughFile, getActiveSourceFiles, log } from './helpers.js'
-
-const defaultScriptsToKill = ['daemon.js', 'gangs.js', 'sleeve.js', 'work-for-factions.js', 'farm-intelligence.js', 'hacknet-upgrade-manager.js']
-    .map(s => getFilePath(s));
+import { log, getConfiguration, getFilePath, runCommand, waitForProcessToComplete, getNsDataThroughFile, getActiveSourceFiles } from './helpers.js'
 
 const argsSchema = [
     ['prioritize-augmentations', false], // If set to true, will spend as much money as possible on augmentations before upgrading home RAM
@@ -9,15 +6,16 @@ const argsSchema = [
     /* OR */['reset', false], // An alias for the above flag, does the same thing.
     ['allow-soft-reset', false], // If set to true, allows ascend.js to invoke a **soft** reset (installs no augs) when no augs are affordable. This is useful e.g. when ascending rapidly to grind hacknet hash upgrades.
     ['bypass-stanek-warning', false], // If set to true, and this will bypass the warning before purchasing augmentations if you haven't gotten stanek yet.
-    ['scripts-to-kill', []], // Kill these money-spending scripts at launch (if not specified, defaults to all scripts in defaultScriptsToKill above)
     // Spawn this script after installing augmentations (Note: Args not supported by the game)
     ['on-reset-script', null], // By default, will start with `stanek.js` if you have stanek's gift, otherwise `daemon.js`.
+    ['ticks-to-wait-for-additional-purchases', 10], // Don't reset until we've gone this many game ticks without any new purchases being made (10 * 200ms (game tick time) ~= 2 seconds)
+    ['max-wait-time', 60000], // The maximum number of milliseconds we'll wait for external scripts to purchase whatever permanent upgrades they can before we ascend anyway.
 ];
 
 export function autocomplete(data, args) {
     data.flags(argsSchema);
     const lastFlag = args.length > 1 ? args[args.length - 2] : null;
-    if (["--scripts-to-kill", "--on-reset-script"].includes(lastFlag))
+    if (["--on-reset-script"].includes(lastFlag))
         return data.scripts;
     return [];
 }
@@ -25,19 +23,20 @@ export function autocomplete(data, args) {
 /** @param {NS} ns 
  * This script is meant to do all the things best done when ascending (in a generally ideal order) **/
 export async function main(ns) {
-    const options = ns.flags(argsSchema);
-    let scriptsToKill = options['scripts-to-kill'];
-    if (scriptsToKill.length == 0) scriptsToKill = defaultScriptsToKill;
+    const options = getConfiguration(ns, argsSchema);
+    if (!options) return; // Invalid options, or ran in --help mode.
     let dictSourceFiles = await getActiveSourceFiles(ns); // Find out what source files the user has unlocked
     if (!(4 in dictSourceFiles))
         return log(ns, "ERROR: You cannot automate installing augmentations until you have unlocked singularity access (SF4).", true, 'error');
+    ns.disableLog('sleep');
 
     // TODO: Additional sanity checks: Make sure it's a good time to reset
     // - We should be able to install ~10 augs or so after maxing home ram purchases?
     const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt');
 
-    // Kill any other scripts that may interfere with our spending
-    let pid = await runCommand(ns, `ns.ps().filter(s => ${JSON.stringify(scriptsToKill)}.includes(s.filename)).forEach(s => ns.kill(s.pid));`, '/Temp/kill-processes.js');
+    // Kill every script except this one, since it can interfere with out spending
+    let pid = await runCommand(ns, `ns.ps().filter(s => s.filename != ns.args[0]).forEach(s => ns.kill(s.pid));`,
+        '/Temp/kill-everything-but.js', [ns.getScriptName()]);
     await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down, indicating it has shut down other scripts
 
     // Stop the current action so that we're no longer spending money (if training) and can collect rep earned (if working)
@@ -74,7 +73,7 @@ export async function main(ns) {
 
     // TODO: (SF13) If Stanek is unlocked, and we have not yet accepted Stanek's gift, now's our last chance to do it (before purchasing augs)
 
-    // STEP 3: Buy as many augmentations as possible
+    // STEP 3: Buy as many desired augmentations as possible
     log(ns, 'Purchasing augmentations...', true, 'info');
     const facmanArgs = ['--purchase', '-v'];
     if (options['bypass-stanek-warning']) {
@@ -87,7 +86,7 @@ export async function main(ns) {
     // Sanity check, if we are not slated to install any augmentations, ABORT
     // Get owned + purchased augmentations, then installed augmentations. Ensure there's a difference
     let purchasedAugmentations = await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations(true)', '/Temp/player-augs-purchased.txt');
-    let installedAugmentations = await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations(false)', '/Temp/player-augs-installed.txt');
+    let installedAugmentations = await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
     let noAugsToInstall = purchasedAugmentations.length == installedAugmentations.length;
     if (noAugsToInstall && !options['allow-soft-reset'])
         return log(ns, `ERROR: See above faction-manager.js logs - there are no new purchased augs. ` +
@@ -106,7 +105,7 @@ export async function main(ns) {
     // STEP 5: (SF10) Buy whatever sleeve upgrades we can afford
     if (10 in dictSourceFiles) {
         log(ns, 'Try Upgrade Sleeves...', true, 'info');
-        ns.run(getFilePath('sleeve.js'), 1, '--reserve', '0', '--aug-budget', '1', '--min-aug-batch', '1', '--buy-cooldown', '0');
+        ns.run(getFilePath('sleeve.js'), 1, '--reserve', '0', '--aug-budget', '1', '--min-aug-batch', '1', '--buy-cooldown', '0', '--disable-training');
         await ns.sleep(500); // Give it time to make its initial purchases. Note that we do not block on the process shutting down - it will keep running.
     }
 
@@ -135,13 +134,22 @@ export async function main(ns) {
     // WAIT: For money to stop decreasing, so we know that external scripts have bought what they could.
     log(ns, 'Waiting for purchasing to stop...', true, 'info');
     let money = 0, lastMoney = 0, ticksWithoutPurchases = 0;
-    while (ticksWithoutPurchases < 10) { // 10 * 200ms (game tick time) ~= 2 seconds
+    const maxWait = Date.now() + options['max-wait-time'];
+    while (ticksWithoutPurchases < options['ticks-to-wait-for-additional-purchases'] && (Date.now() < maxWait)) {
         const start = Date.now(); // Used to wait for the game to tick.
-        while ((Date.now() - start <= 200) && lastMoney == (money = await getNsDataThroughFile(ns, `ns.getServerMoneyAvailable('home')`, '/Temp/player-money.txt')))
+        const refreshMoney = async () => money =
+            await getNsDataThroughFile(ns, `ns.getServerMoneyAvailable(ns.args[0])`, `/Temp/getServerMoneyAvailable.txt`, ["home"]);
+        while ((Date.now() - start <= 200) && lastMoney == await refreshMoney())
             await ns.sleep(10); // Wait for game to tick (money to change) - might happen sooner than 200ms
         ticksWithoutPurchases = money < lastMoney ? 0 : ticksWithoutPurchases + 1;
         lastMoney = money;
     }
+
+    // STEP 3 REDUX: If somehow we have money left over and can afford some junk augs that weren't on our desired list, grab them too
+    log(ns, 'Seeing if we can afford any other augmentations...', true, 'info');
+    facmanArgs.push('--stat-desired', '_'); // Means buy any aug with any stats
+    pid = ns.run(getFilePath('faction-manager.js'), 1, ...facmanArgs);
+    await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down, indicating it is done.
 
     // Clean up our temp folder - it's good to do this once in a while to reduce the save footprint.
     await waitForProcessToComplete(ns, ns.run(getFilePath('cleanup.js')), true);
@@ -154,9 +162,9 @@ export async function main(ns) {
             // Default script (if none is specified) is stanek.js if we have it (which in turn will spawn daemon.js when done)
             (purchasedAugmentations.includes(`Stanek's Gift - Genesis`) ? getFilePath('stanek.js') : getFilePath('daemon.js'));
         if (noAugsToInstall)
-            await runCommand(ns, `ns.softReset('${resetScript}')`, '/Temp/soft-reset.js');
+            await runCommand(ns, `ns.softReset(ns.args[0])`, '/Temp/soft-reset.js', [resetScript]);
         else
-            await runCommand(ns, `ns.installAugmentations('${resetScript}')`, '/Temp/install-augmentations.js');
+            await runCommand(ns, `ns.installAugmentations(ns.args[0])`, '/Temp/install-augmentations.js', [resetScript]);
     } else
         log(ns, `SUCCESS: Ready to ascend. In the future, you can run with --reset (or --install-augmentations) ` +
             `to actually perform the reset automatically.`, true, 'success');

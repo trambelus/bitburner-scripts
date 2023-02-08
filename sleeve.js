@@ -1,4 +1,4 @@
-import { instanceCount, getActiveSourceFiles, getNsDataThroughFile, runCommand, formatMoney, formatDuration, disableLogs, log } from './helpers.js'
+import { log, getConfiguration, instanceCount, disableLogs, getActiveSourceFiles, getNsDataThroughFile, runCommand, formatMoney, formatDuration } from './helpers.js'
 
 const interval = 5000; // Uodate (tick) this often
 const minTaskWorkTime = 29000; // Sleeves assigned a new task should stick to it for at least this many milliseconds
@@ -37,8 +37,9 @@ export function autocomplete(data, _) {
 
 /** @param {NS} ns **/
 export async function main(ns) {
-    if (await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
-    options = ns.flags(argsSchema);
+    const runOptions = getConfiguration(ns, argsSchema);
+    if (!runOptions || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
+    options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     disableLogs(ns, ['getServerMoneyAvailable']);
     // Ensure the global state is reset (e.g. after entering a new bitnode)
     task = [], lastStatusUpdateTime = [], lastPurchaseTime = [], lastPurchaseStatusUpdate = [], availableAugs = [], cacheExpiry = [], lastReassignTime = [];
@@ -108,8 +109,8 @@ async function mainLoop(ns) {
             log(ns, `SUCCESS: Bought "Improve Gym Training" to speed up Sleeve training.`, false, 'success');
 
     // Update all sleeve stats and loop over all sleeves to do some individual checks and task assignments
-    let sleeveStats = await getNsDataThroughFile(ns, `[...Array(${numSleeves}).keys()].map(i => ns.sleeve.getSleeveStats(i))`, '/Temp/sleeve-stats.txt');
-    let sleeveInfo = await getNsDataThroughFile(ns, `[...Array(${numSleeves}).keys()].map(i => ns.sleeve.getInformation(i))`, '/Temp/sleeve-information.txt');
+    let sleeveStats = await getNsDataThroughFile(ns, `ns.args.map(i => ns.sleeve.getSleeveStats(i))`, '/Temp/sleeve-stats.txt', [...Array(numSleeves).keys()]);
+    let sleeveInfo = await getNsDataThroughFile(ns, `ns.args.map(i => ns.sleeve.getInformation(i))`, '/Temp/sleeve-information.txt', [...Array(numSleeves).keys()]);
     for (let i = 0; i < numSleeves; i++) {
         let sleeve = { ...sleeveStats[i], ...sleeveInfo[i] }; // For convenience, merge all sleeve stats/info into one object
         // MANAGE SLEEVE AUGMENTATIONS
