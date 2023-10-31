@@ -26,7 +26,7 @@ const serviceName = 'infiltrator'
 const WKSharmonizerMult = 1.5
 
 const _win = [].map.constructor('return this')()
-const _doc = _win.document
+const _doc = [].map.constructor('return this.document')()
 
 const argsSchema = [
   ['stop', false], // set to stop the old service and not start a new one
