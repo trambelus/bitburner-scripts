@@ -1,4 +1,4 @@
-import { getNsDataThroughFile, getFilePath } from './helpers.js'
+import { getNsDataThroughFile, getFilePath, log } from './helpers.js'
 
 const spawnDelay = 50; // Delay to allow time for `installBackdoor` to start running before a background script connects back to 'home'
 
@@ -35,27 +35,34 @@ export let main = async ns => {
         toBackdoor = toBackdoor.filter(s => ns.hasRootAccess(s));
         ns.print(`${toBackdoor.length} of ${count} servers to be backdoored are rooted and within our hack level (${myHackingLevel})`);
 
+        let scriptPath = getFilePath('/Tasks/backdoor-all-servers.js.backdoor-one.js');
+        let currentScripts = ns.ps().filter(s => s.filename == scriptPath).map(s => s.args[0]);
+
         for (const server of toBackdoor) {
+            if (currentScripts.find(x => x == server)) {
+                log(ns, `INFO: Server already beeing backdoored: ${server}`);
+                continue;
+            }
             ns.print(`Hopping to ${server}`);
             anyConnected = true;
             for (let hop of routes[server])
-                ns.connect(hop);
+                ns.singularity.connect(hop);
             if (server === "w0r1d_d43m0n") {
                 ns.alert("Ready to hack w0r1d_d43m0n!");
                 while (true) await ns.sleep(10000); // Sleep forever so the script isn't run multiple times to create multiple overlapping alerts
             }
             ns.print(`Installing backdoor on "${server}"...`);
             // Kick off a separate script that will run backdoor before we connect to home.
-            var pid = ns.run(getFilePath('/Tasks/backdoor-all-servers.js.backdoor-one.js'), 1, server);
+            var pid = ns.run(scriptPath, 1, server);
             if (pid === 0)
                 return ns.print(`Couldn't initiate a new backdoor of "${server}"" (insufficient RAM?). Will try again later.`);
             await ns.sleep(spawnDelay); // Wait some time for the external backdoor script to initiate its backdoor of the current connected server
-            ns.connect("home");
+            ns.singularity.connect("home");
         }
     } catch (err) {
         ns.tprint(String(err));
     } finally {
         if (anyConnected)
-            ns.connect("home");
+            ns.singularity.connect("home");
     }
 };

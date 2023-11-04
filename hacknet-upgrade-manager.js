@@ -65,10 +65,10 @@ function setStatus(ns, logMessage) {
 // Will buy the most effective hacknet upgrade, so long as it will pay for itself in the next {payoffTimeSeconds} seconds.
 /** @param {NS} ns **/
 export function upgradeHacknet(ns, maxSpend, maxPayoffTimeSeconds = 3600 /* 3600 sec == 1 hour */, options) {
-    const currentHacknetMult = ns.getPlayer().hacknet_node_money_mult;
+    const currentHacknetMult = ns.getPlayer().mults.hacknet_node_money;
     // Get the lowest cache level, we do not consider upgrading the cache level of servers above this until all have the same cache level
     const minCacheLevel = [...Array(ns.hacknet.numNodes()).keys()].reduce((min, i) => Math.min(min, ns.hacknet.getNodeStats(i).cache), Number.MAX_VALUE);
-    // TODO: Change this all to use https://bitburner.readthedocs.io/en/latest/netscript/formulasapi/hacknetServers/hashGainRate.html
+    // Note: Formulas API has a hashGainRate which should agree with these calcs, but this way they're available even without the formulas API
     const upgrades = [{ name: "none", cost: 0 }, {
         name: "level", upgrade: ns.hacknet.upgradeLevel, cost: i => ns.hacknet.getLevelUpgradeCost(i, 1), nextValue: nodeStats => nodeStats.level + 1,
         addedProduction: nodeStats => nodeStats.production * ((nodeStats.level + 1) / nodeStats.level - 1)

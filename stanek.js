@@ -1,17 +1,16 @@
 import {
     log, disableLogs, getFilePath, getConfiguration, formatNumberShort, formatRam,
-    getNsDataThroughFile, waitForProcessToComplete, getActiveSourceFiles, instanceCount
+    getNsDataThroughFile, waitForProcessToComplete, getActiveSourceFiles, instanceCount, unEscapeArrayArgs
 } from './helpers.js'
 
 // Default sripts called at startup and shutdown of stanek
 const defaultStartupScript = getFilePath('daemon.js');
-const defaultStartupArgs = ['--reserved-ram', Number.MAX_SAFE_INTEGER];
+const defaultStartupArgs = ['--reserved-ram', 1E100];
 const defaultCompletionScript = getFilePath('daemon.js');
-const defaultCompletionArgs = ['-v', '--stock-manipulation'];
+const defaultCompletionArgs = [];
 // Name of the external script that will be created and called to generate charges
 const chargeScript = "/Temp/stanek.js.charge.js";
-const awakeningRep = 1E6;
-const serenityRep = 100E6;
+let awakeningRep = 1E6, serenityRep = 100E6; // Base reputation cost - can be scaled by bitnode multipliers
 
 const argsSchema = [
     ['reserved-ram', 32], // Don't use this RAM
@@ -25,7 +24,7 @@ const argsSchema = [
     ['on-completion-script', null], // (Default in code) Spawn this script when max-charges is reached
     ['on-completion-script-args', []], // (Default in code) Optional args to pass to the script when launched
     ['no-tail', false], // By default, keeps a tail window open, because it's pretty important to know when this script is running (can't use home for anything else)
-    ['reputation-threshold', 0.2], // By default, if we are this close to the 100m rep needed for an unowned aug (e.g. "Stanek's Gift - Serenity"), we will keep charging despite the 'max-charges' setting
+    ['reputation-threshold', 0.2], // By default, if we are this close to the rep needed for an unowned stanek upgrade (e.g. "Stanek's Gift - Serenity"), we will keep charging despite the 'max-charges' setting
 ];
 
 export function autocomplete(data, args) {
@@ -56,11 +55,11 @@ export async function main(ns) {
             return log(ns, "ERROR: You must manually populate your stanek grid with your desired fragments before you run this script to charge them.", true, 'error');
     }
 
-    currentServer = await getNsDataThroughFile(ns, `ns.getHostname()`, '/Temp/getHostname.txt');
+    currentServer = await getNsDataThroughFile(ns, `ns.getHostname()`);
     maxCharges = options['max-charges']; // Don't bother adding charges beyond this amount
     idealReservedRam = 32; // Reserve this much RAM, if it wouldnt make a big difference anyway. Leaves room for other temp-scripts to spawn.
     let startupScript = options['on-startup-script'];
-    let startupArgs = options['on-startup-script-args'];
+    let startupArgs = unEscapeArrayArgs(options['on-startup-script-args']);
     if (!startupScript) { // Apply defaults if not present.
         startupScript = defaultStartupScript;
         if (startupArgs.length == 0) startupArgs = defaultStartupArgs;
@@ -89,9 +88,16 @@ export async function main(ns) {
     if (sf4Level == 0) {
         log(ns, `INFO: SF4 required to get owned faction rep and augmentation info. Ignoring the --reputation-threshold setting.`);
     } else {
-        const ownedAugmentations = await getNsDataThroughFile(ns, `ns.getOwnedAugmentations(true)`, '/Temp/player-augs-purchased.txt');
-        const awakeningOwned = ownedAugmentations.includes("Stanek's Gift - Awakening");
-        const serenityOwned = ownedAugmentations.includes("Stanek's Gift - Serenity");
+        const ownedAugmentations = await getNsDataThroughFile(ns, `ns.singularity.getOwnedAugmentations(true)`, '/Temp/player-augs-purchased.txt');
+        const [strAwakening, strSerenity] = ["Stanek's Gift - Awakening", "Stanek's Gift - Serenity"];
+        const [awakeningOwned, serenityOwned] = [ownedAugmentations.includes(strAwakening), ownedAugmentations.includes(strSerenity)];
+        if (!awakeningOwned || !serenityOwned) {
+            [awakeningRep, serenityRep] = await getNsDataThroughFile(ns,
+                `[${[strAwakening, strSerenity].map(a => `ns.singularity.getAugmentationRepReq(\"${a}\")`)}]`,
+                '/Temp/stanek-aug-rep-reqs.txt');
+            log(ns, `INFO: Stanek Augmentations Rep Requirements are Awakening: ${formatNumberShort(awakeningRep)}, ` +
+                `Serenity: ${formatNumberShort(serenityRep)} (--reputation-threshold = ${options['reputation-threshold']})`);
+        }
         shouldContinueForAug = (currentRep) => // return true if currentRep is high enough that we should keep grinding for the next unowned aug
             !awakeningOwned && options['reputation-threshold'] * awakeningRep <= currentRep && currentRep < awakeningRep ||
             !serenityOwned && options['reputation-threshold'] * serenityRep <= currentRep && currentRep < serenityRep
@@ -118,7 +124,7 @@ export async function main(ns) {
     log(ns, `SUCCESS: All stanek fragments at desired charge ${maxCharges}`, true, 'success');
     // Run the completion script before shutting down    
     let completionScript = options['on-completion-script'];
-    let completionArgs = options['on-completion-script-args'];
+    let completionArgs = unEscapeArrayArgs(options['on-completion-script-args']);
     if (!completionScript) { // Apply defaults if not present.
         completionScript = defaultCompletionScript;
         if (completionArgs.length == 0) completionArgs = defaultCompletionArgs;
@@ -140,7 +146,7 @@ async function getFragmentsToCharge(ns) {
         return undefined;
     }
     // If we have SF4, get our updated faction rep, and determine if we should continue past --max-charges to earn rep for the next augmentation
-    const churchRep = sf4Level ? await getNsDataThroughFile(ns, 'ns.getFactionRep("Church of the Machine God")', '/Temp/stanek-reputation.txt') : 0;
+    const churchRep = sf4Level ? await getNsDataThroughFile(ns, 'ns.singularity.getFactionRep(ns.args[0])', null, ["Church of the Machine God"]) : 0;
     const shouldContinue = shouldContinueForAug(churchRep);
 
     // Collect information about each fragment's charge status, and prepare a status update
@@ -181,7 +187,7 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
         const threads = Math.floor((availableRam - reservedRam) / 2.0);
         if (threads <= 0) {
             log(ns, `WARNING: Insufficient free RAM on ${currentServer} to charge Stanek ` +
-                `(${formatRam(availableRam)} free - ${formatRAM(reservedRam)} reserved). Will try again later...`);
+                `(${formatRam(availableRam)} free - ${formatRam(reservedRam)} reserved). Will try again later...`);
             continue;
         }
         const pid = ns.run(chargeScript, threads, fragment.x, fragment.y);
@@ -199,5 +205,5 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
  * @param {NS} ns
  * @returns {Promise<ActiveFragment[]>} **/
 async function getActiveFragments(ns) {
-    return await getNsDataThroughFile(ns, 'ns.stanek.activeFragments()', '/Temp/stanek-fragments.txt');
+    return await getNsDataThroughFile(ns, 'ns.stanek.activeFragments()');
 }

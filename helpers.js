@@ -21,7 +21,7 @@ export function formatNumberShort(num, maxSignificantFigures = 6, maxDecimalPlac
     if (Math.abs(num) > 10 ** (3 * symbols.length)) // If we've exceeded our max symbol, switch to exponential notation
         return num.toExponential(Math.min(maxDecimalPlaces, maxSignificantFigures - 1));
     for (var i = 0, sign = Math.sign(num), num = Math.abs(num); num >= 1000 && i < symbols.length; i++) num /= 1000;
-    // TODO: A number like 9.999 once rounted to show 3 sig figs, will become 10.00, which is now 4 sig figs.
+    // TODO: A number like 9.999 once rounded to show 3 sig figs, will become 10.00, which is now 4 sig figs.
     return ((sign < 0) ? "-" : "") + num.toFixed(Math.max(0, Math.min(maxDecimalPlaces, maxSignificantFigures - Math.floor(1 + Math.log10(num))))) + symbols[i];
 }
 
@@ -46,7 +46,7 @@ export function formatNumber(num, minSignificantFigures = 3, minDecimalPlaces = 
 }
 
 /** Formats some RAM amount as a round number of GB with thousands separators e.g. `1,028 GB` */
-export function formatRam(num) { return `${Math.round(num).toLocaleString()} GB`; }
+export function formatRam(num) { return `${Math.round(num).toLocaleString('en')} GB`; }
 
 /** Return a datatime in ISO format */
 export function formatDateTime(datetime) { return datetime.toISOString(); }
@@ -127,69 +127,89 @@ export function getFnIsAliveViaNsPs(ns) {
  * Has the capacity to retry if there is a failure (e.g. due to lack of RAM available). Not recommended for performance-critical code.
  * @param {NS} ns - The nestcript instance passed to your script's main entry point
  * @param {string} command - The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
- * @param {string=} fName - (default "/Temp/{commandhash}-data.txt") The name of the file to which data will be written to disk by a temporary process
+ * @param {string=} fName - (default "/Temp/{command-name}.txt") The name of the file to which data will be written to disk by a temporary process
  * @param {args=} args - args to be passed in as arguments to command being run as a new script.
  * @param {bool=} verbose - (default false) If set to true, pid and result of command are logged.
  **/
-export async function getNsDataThroughFile(ns, command, fName, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50) {
+export async function getNsDataThroughFile(ns, command, fName = null, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50) {
     checkNsInstance(ns, '"getNsDataThroughFile"');
     if (!verbose) disableLogs(ns, ['run', 'isRunning']);
-    return await getNsDataThroughFile_Custom(ns, ns.run, ns.isRunning, command, fName, args, verbose, maxRetries, retryDelayMs);
+    return await getNsDataThroughFile_Custom(ns, ns.run, command, fName, args, verbose, maxRetries, retryDelayMs);
+}
+
+/** Convert a command name like "ns.namespace.someFunction(args, args)" into
+ * a default file path for running that command "/Temp/namespace-someFunction.txt" */
+function getDefaultCommandFileName(command, ext = '.txt') {
+    // If prefixed with "ns.", strip that out
+    let fname = command;
+    if (fname.startsWith("ns.")) fname = fname.slice(3);
+    // Remove anything between parentheses
+    fname = fname.replace(/ *\([^)]*\) */g, "");
+    // Replace any dereferencing (dots) with dashes
+    fname = fname.replace(".", "-");
+    return `/Temp/${fname}${ext}`
 }
 
 /**
- * An advanced version of getNsDataThroughFile that lets you pass your own "fnRun" and "fnIsAlive" implementations to reduce RAM requirements
- * Importing incurs no RAM (now that ns.read is free) plus whatever fnRun / fnIsAlive you provide it
+ * An advanced version of getNsDataThroughFile that lets you pass your own "fnRun" implementation to reduce RAM requirements
+ * Importing incurs no RAM (now that ns.read is free) plus whatever fnRun you provide it
  * Has the capacity to retry if there is a failure (e.g. due to lack of RAM available). Not recommended for performance-critical code.
  * @param {NS} ns - The nestcript instance passed to your script's main entry point
  * @param {function} fnRun - A single-argument function used to start the new sript, e.g. `ns.run` or `(f,...args) => ns.exec(f, "home", ...args)`
- * @param {function} fnIsAlive - A single-argument function used to start the new sript, e.g. `ns.isRunning` or `pid => ns.ps("home").some(process => process.pid === pid)`
  * @param {args=} args - args to be passed in as arguments to command being run as a new script.
  **/
-export async function getNsDataThroughFile_Custom(ns, fnRun, fnIsAlive, command, fName, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50) {
+export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = null, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50) {
     checkNsInstance(ns, '"getNsDataThroughFile_Custom"');
     if (!verbose) disableLogs(ns, ['read']);
-    const commandHash = hashCode(command);
-    fName = fName || `/Temp/${commandHash}-data.txt`;
-    const fNameCommand = (fName || `/Temp/${commandHash}-command`) + '.js'
-    // Defend against stale data by pre-writing the file with invalid data TODO: Remove if this condition is never encountered
-    await ns.write(fName, "<Insufficient RAM>", 'w');
+    fName = fName || getDefaultCommandFileName(command);
+    const fNameCommand = fName + '.js'
+    // Pre-write contents to the file that will allow us to detect if our temp script never got run
+    const initialContents = "<Insufficient RAM>";
+    ns.write(fName, initialContents, 'w');
+    // TODO: Workaround for v2.3.0 deprecation. Remove when the warning is gone.
+    // Avoid serializing ns.getPlayer() properties that generate warnings
+    if (command === "ns.getPlayer()")
+        command = `( ()=> { let player = ns.getPlayer();
+            const excludeProperties = ['playtimeSinceLastAug', 'playtimeSinceLastBitnode', 'bitNodeN'];
+            return Object.keys(player).reduce((pCopy, key) => {
+                if (!excludeProperties.includes(key))
+                   pCopy[key] = player[key];
+                return pCopy;
+            }, {});
+        })()`;
+
     // Prepare a command that will write out a new file containing the results of the command
     // unless it already exists with the same contents (saves time/ram to check first)
     // If an error occurs, it will write an empty file to avoid old results being misread.
-    const commandToFile = `let result="";try{result=JSON.stringify(
-            ${command}
-        );}catch(err){result = "ERROR: " + (typeof err === 'string' ? err : err.message || JSON.stringify(err))}
-        const f="${fName}"; if(ns.read(f)!==result) await ns.write(f,result,'w')`;
+    const commandToFile = `let r;try{r=JSON.stringify(\n` +
+        `    ${command}\n` +
+        `);}catch(e){r="ERROR: "+(typeof e=='string'?e:e.message||JSON.stringify(e));}\n` +
+        `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w')`;
     // Run the command with auto-retries if it fails
-    const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, args, false, maxRetries, retryDelayMs);
-    // Wait for the process to complete
+    const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, args, verbose, maxRetries, retryDelayMs);
+    // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
+    const fnIsAlive = (ignored_pid) => ns.read(fName) === initialContents;
     await waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose);
-    if (verbose) ns.print(`Process ${pid} is done. Reading the contents of ${fName}...`);
-    // Read the file, with auto-retries if it fails
+    if (verbose) log(ns, `Process ${pid} is done. Reading the contents of ${fName}...`);
+    // Read the file, with auto-retries if it fails // TODO: Unsure reading a file can fail or needs retrying. 
     let lastRead;
-    try {
-        const fileData = await autoRetry(ns, () => ns.read(fName),
-            f => (lastRead = f) !== undefined && f !== "" && f !== "<Insufficient RAM>" && !(typeof f == "string" && f.startsWith("ERROR: ")),
-            () => `\nns.read('${fName}') returned a bad result: "${lastRead}".` +
-                `\n  Script:  ${fNameCommand}\n  Args:    ${JSON.stringify(args)}\n  Command: ${command}` +
-                (lastRead == undefined ? '\nThe developer has no idea how this could have happend. Please post a screenshot of this error on discord.' :
-                    lastRead == "<Insufficient RAM>" ? `\nThe script that ran this will likely recover and try again later once you have more free ram.` :
-                        lastRead == "" ? `\nThe file appears to have been deleted before a result could be retrieved. Perhaps there is a conflicting script.` :
-                            `\nThe script was likely passed invalid arguments. Please post a screenshot of this error on discord.`),
-            maxRetries, retryDelayMs, undefined, verbose);
-        if (verbose) ns.print(`Read the following data for command ${command}:\n${fileData}`);
-        return JSON.parse(fileData); // Deserialize it back into an object/array and return
-    } finally {
-        // If we failed to run the command, clear the "stale" contents we created earlier. Ideally, we would remove the file entirely, but this is not free.
-        if (lastRead == "STALE") await ns.write(fName, "", 'w');
-    }
+    const fileData = await autoRetry(ns, () => ns.read(fName),
+        f => (lastRead = f) !== undefined && f !== "" && f !== initialContents && !(typeof f == "string" && f.startsWith("ERROR: ")),
+        () => `\nns.read('${fName}') returned a bad result: "${lastRead}".` +
+            `\n  Script:  ${fNameCommand}\n  Args:    ${JSON.stringify(args)}\n  Command: ${command}` +
+            (lastRead == undefined ? '\nThe developer has no idea how this could have happened. Please post a screenshot of this error on discord.' :
+                lastRead == initialContents ? `\nThe script that ran this will likely recover and try again later once you have more free ram.` :
+                    lastRead == "" ? `\nThe file appears to have been deleted before a result could be retrieved. Perhaps there is a conflicting script.` :
+                        `\nThe script was likely passed invalid arguments. Please post a screenshot of this error on discord.`),
+        maxRetries, retryDelayMs, undefined, verbose, verbose);
+    if (verbose) log(ns, `Read the following data for command ${command}:\n${fileData}`);
+    return JSON.parse(fileData); // Deserialize it back into an object/array and return
 }
 
 /** Evaluate an arbitrary ns command by writing it to a new script and then running or executing it.
  * @param {NS} ns - The nestcript instance passed to your script's main entry point
  * @param {string} command - The ns command that should be invoked to get the desired data (e.g. "ns.getServer('home')" )
- * @param {string=} fileName - (default "/Temp/{commandhash}-data.txt") The name of the file to which data will be written to disk by a temporary process
+ * @param {string=} fileName - (default "/Temp/{command-name}.txt") The name of the file to which data will be written to disk by a temporary process
  * @param {args=} args - args to be passed in as arguments to command being run as a new script.
  * @param {bool=} verbose - (default false) If set to true, the evaluation result of the command is printed to the terminal
  */
@@ -197,6 +217,21 @@ export async function runCommand(ns, command, fileName, args = [], verbose = fal
     checkNsInstance(ns, '"runCommand"');
     if (!verbose) disableLogs(ns, ['run']);
     return await runCommand_Custom(ns, ns.run, command, fileName, args, verbose, maxRetries, retryDelayMs);
+}
+
+const _cachedExports = [];
+/** @param {NS} ns - The nestcript instance passed to your script's main entry point
+ * @returns {string[]} The set of all funciton names exported by this file. */
+function getExports(ns) {
+    if (_cachedExports.length > 0) return _cachedExports;
+    const scriptHelpersRows = ns.read(getFilePath('helpers.js')).split("\n");
+    for (const row of scriptHelpersRows) {
+        if (!row.startsWith("export")) continue;
+        const funcNameStart = row.indexOf("function") + "function".length + 1;
+        const funcNameEnd = row.indexOf("(", funcNameStart);
+        _cachedExports.push(row.substring(funcNameStart, funcNameEnd));
+    }
+    return _cachedExports;
 }
 
 /**
@@ -210,32 +245,37 @@ export async function runCommand(ns, command, fileName, args = [], verbose = fal
  **/
 export async function runCommand_Custom(ns, fnRun, command, fileName, args = [], verbose = false, maxRetries = 5, retryDelayMs = 50) {
     checkNsInstance(ns, '"runCommand_Custom"');
-    if (!Array.isArray(args)) throw Error(`args specified were a ${typeof args}, but an array is required.`);
-    if (!verbose) disableLogs(ns, ['asleep']);
-    let script = `import { formatMoney, formatNumberShort, formatDuration, parseShortNumber, scanAllServers } fr` + `om '${getFilePath('helpers.js')}'\n` +
-        `export async function main(ns) { try { ` +
-        (verbose ? `let output = ${command}; ns.tprint(output)` : command) +
-        `; } catch(err) { ns.tprint(String(err)); throw(err); } }`;
-    fileName = fileName || `/Temp/${hashCode(command)}-command.js`;
-    // To improve performance avoid various issues, we try to avoid overwriting temp scripts with different contents.
-    const oldContents = ns.read(fileName);
-    if (oldContents != script) {
-        if (oldContents)
-            ns.tprint(`WARNING: Had to overwrite temp script ${fileName}\nOld Contents:\n${oldContents}\nNew Contents:\n${script}` +
-                `\nThis warning is generated as part of an effort to switch over to using only 'immutable' temp scripts. ` +
-                `Please paste a screenshot in Discord at https://discord.com/channels/415207508303544321/935667531111342200`);
-        await ns.write(fileName, script, "w");
-    }
-    // Wait for the script to appear (game can be finicky on actually completing the write)
-    await autoRetry(ns, () => ns.read(fileName), contents => contents == script,
-        () => `Temporary script ${fileName} is not available, despite having written it. (Did a competing process delete or overwrite it?)`,
-        maxRetries, retryDelayMs, undefined, verbose);
-    // Run the script, now that we're sure it is in place
-    return await autoRetry(ns, () => fnRun(fileName, 1 /* Always 1 thread */, ...args), temp_pid => temp_pid !== 0,
-        () => `Run command returned no pid (command likely failed to run).` +
-            `\n  Command: ${command}\n  Temp Script: ${fileName}` +
-            `\nEnsure you have sufficient free RAM to run this temporary script.`,
-        maxRetries, retryDelayMs, undefined, verbose);
+    if (!Array.isArray(args)) throw new Error(`args specified were a ${typeof args}, but an array is required.`);
+    if (!verbose) disableLogs(ns, ['sleep']);
+    // Auto-import any helpers that the temp script attempts to use
+    const required = getExports(ns).filter(e => command.includes(`${e}(`));
+    let script = (required.length > 0 ? `import { ${required.join(", ")} } from 'helpers.js'\n` : '') +
+        `export async function main(ns) { ${command} }`;
+    fileName = fileName || getDefaultCommandFileName(command, '.js');
+    if (verbose)
+        log(ns, `INFO: Using a temporary script (${fileName}) to execute the command:` +
+            `\n  ${command}\nWith the following arguments:    ${JSON.stringify(args)}`);
+    // It's possible for the file to be deleted while we're trying to execute it, so even wrap writing the file in a retry
+    return await autoRetry(ns, async () => {
+        // To improve performance, don't re-write the temp script if it's already in place with the correct contents.
+        const oldContents = ns.read(fileName);
+        if (oldContents != script) {
+            if (oldContents) // Create some noise if temp scripts are being created with the same name but different contents
+                ns.tprint(`WARNING: Had to overwrite temp script ${fileName}\nOld Contents:\n${oldContents}\nNew Contents:\n${script}` +
+                    `\nThis warning is generated as part of an effort to switch over to using only 'immutable' temp scripts. ` +
+                    `Please paste a screenshot in Discord at https://discord.com/channels/415207508303544321/935667531111342200`);
+            ns.write(fileName, script, "w");
+            // Wait for the script to appear and be readable (game can be finicky on actually completing the write)
+            await autoRetry(ns, () => ns.read(fileName), c => c == script, () => `Temporary script ${fileName} is not available, ` +
+                `despite having written it. (Did a competing process delete or overwrite it?)`, maxRetries, retryDelayMs, undefined, verbose, verbose);
+        }
+        // Run the script, now that we're sure it is in place
+        return fnRun(fileName, 1 /* Always 1 thread */, ...args);
+    }, pid => pid !== 0,
+        () => `The temp script was not run (likely due to insufficient RAM).` +
+            `\n  Script:  ${fileName}\n  Args:    ${JSON.stringify(args)}\n  Command: ${command}` +
+            `\nThe script that ran this will likely recover and try again later once you have more free ram.`,
+        maxRetries, retryDelayMs, undefined, verbose, verbose);
 }
 
 /**
@@ -254,32 +294,41 @@ export async function waitForProcessToComplete(ns, pid, verbose) {
  * An advanced version of waitForProcessToComplete that lets you pass your own "isAlive" test to reduce RAM requirements (e.g. to avoid referencing ns.isRunning)
  * Importing incurs 0 GB RAM (assuming fnIsAlive is implemented using another ns function you already reference elsewhere like ns.ps) 
  * @param {NS} ns - The nestcript instance passed to your script's main entry point
- * @param {function} fnIsAlive - A single-argument function used to start the new sript, e.g. `ns.isRunning` or `pid => ns.ps("home").some(process => process.pid === pid)`
+ * @param {(pid: number) => Promise<boolean>} fnIsAlive - A single-argument function used to start the new sript, e.g. `ns.isRunning` or `pid => ns.ps("home").some(process => process.pid === pid)`
  **/
 export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose) {
     checkNsInstance(ns, '"waitForProcessToComplete_Custom"');
-    if (!verbose) disableLogs(ns, ['asleep']);
+    if (!verbose) disableLogs(ns, ['sleep']);
     // Wait for the PID to stop running (cheaper than e.g. deleting (rm) a possibly pre-existing file and waiting for it to be recreated)
     let start = Date.now();
     let sleepMs = 1;
+    let done = false;
     for (var retries = 0; retries < 1000; retries++) {
-        if (!fnIsAlive(pid)) break; // Script is done running
+        if (!(await fnIsAlive(pid))) {
+            done = true;
+            break; // Script is done running
+        }
         if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
-        await ns.asleep(sleepMs);
+        await ns.sleep(sleepMs);
         sleepMs = Math.min(sleepMs * 2, 200);
     }
     // Make sure that the process has shut down and we haven't just stopped retrying
-    if (fnIsAlive(pid)) {
+    if (!done) {
         let errorMessage = `run-command pid ${pid} is running much longer than expected. Max retries exceeded.`;
         ns.print(errorMessage);
-        throw Error(errorMessage);
+        throw new Error(errorMessage);
     }
+}
+
+/** If the argument is an Error instance, returns it as is, otherwise, returns a new Error instance. */
+function asError(error) {
+    return error instanceof Error ? error : new Error(typeof error === 'string' ? error : JSON.stringify(error));
 }
 
 /** Helper to retry something that failed temporarily (can happen when e.g. we temporarily don't have enough RAM to run)
  * @param {NS} ns - The nestcript instance passed to your script's main entry point */
 export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, errorContext = "Success condition not met",
-    maxRetries = 5, initialRetryDelayMs = 50, backoffRate = 3, verbose = false) {
+    maxRetries = 5, initialRetryDelayMs = 50, backoffRate = 3, verbose = false, tprintFatalErrors = true) {
     checkNsInstance(ns, '"autoRetry"');
     let retryDelayMs = initialRetryDelayMs, attempts = 0;
     while (attempts++ <= maxRetries) {
@@ -287,15 +336,16 @@ export async function autoRetry(ns, fnFunctionThatMayFail, fnSuccessCondition, e
             const result = await fnFunctionThatMayFail()
             const error = typeof errorContext === 'string' ? errorContext : errorContext();
             if (!fnSuccessCondition(result))
-                throw typeof error === 'string' ? Error(error) : error;
+                throw asError(error);
             return result;
         }
         catch (error) {
             const fatal = attempts >= maxRetries;
-            log(ns, `${fatal ? 'FAIL' : 'INFO'}: Attempt ${attempts} of ${maxRetries} to run temp script failed` +
-                (fatal ? `: ${String(error)}` : `. Trying again in ${retryDelayMs}ms...`), fatal, !verbose ? undefined : (fatal ? 'error' : 'info'))
-            if (fatal) throw error;
-            await ns.asleep(retryDelayMs);
+            log(ns, `${fatal ? 'FAIL' : 'INFO'}: Attempt ${attempts} of ${maxRetries} failed` +
+                (fatal ? `: ${typeof error === 'string' ? error : error.message || JSON.stringify(error)}` : `. Trying again in ${retryDelayMs}ms...`),
+                tprintFatalErrors && fatal, !verbose ? undefined : (fatal ? 'error' : 'info'))
+            if (fatal) throw asError(error);
+            await ns.sleep(retryDelayMs);
             retryDelayMs *= backoffRate;
         }
     }
@@ -310,6 +360,7 @@ export function log(ns, message = "", alsoPrintToTerminal = false, toastStyle = 
     if (alsoPrintToTerminal) {
         ns.tprint(message);
         // TODO: Find a way write things logged to the terminal to a "permanent" terminal log file, preferably without this becoming an async function.
+        //       Perhaps we copy logs to a port so that a separate script can optionally pop and append them to a file.
         //ns.write("log.terminal.txt", message + '\n', 'a'); // Note: we should get away with not awaiting this promise since it's not a script file
     }
     return message;
@@ -324,10 +375,10 @@ export function scanAllServers(ns) {
     let infiniteLoopProtection = 9999; // In case you mess with this code, this should save you from getting stuck
     while (hostsToScan.length > 0 && infiniteLoopProtection-- > 0) { // Loop until the list of hosts to scan is empty
         let hostName = hostsToScan.pop(); // Get the next host to be scanned
-        for (const connectedHost of ns.scan(hostName)) // "scan" (list all hosts connected to this one)
-            if (!discoveredHosts.includes(connectedHost)) // If we haven't already scanned this host
-                hostsToScan.push(connectedHost); // Add it to the queue of hosts to be scanned
         discoveredHosts.push(hostName); // Mark this host as "scanned"
+        for (const connectedHost of ns.scan(hostName)) // "scan" (list all hosts connected to this one)
+            if (!discoveredHosts.includes(connectedHost) && !hostsToScan.includes(connectedHost)) // If we haven't found this host
+                hostsToScan.push(connectedHost); // Add it to the queue of hosts to be scanned
     }
     return discoveredHosts; // The list of scanned hosts should now be the set of all hosts in the game!
 }
@@ -339,19 +390,22 @@ export async function getActiveSourceFiles(ns, includeLevelsFromCurrentBitnode =
 }
 
 /** @param {NS} ns 
+ * @param {(ns: NS, command: string, fName?: string, args?: any, verbose?: any, maxRetries?: number, retryDelayMs?: number) => Promise<any>} fnGetNsDataThroughFile
  * getActiveSourceFiles Helper that allows the user to pass in their chosen implementation of getNsDataThroughFile to minimize RAM usage **/
 export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, includeLevelsFromCurrentBitnode = true) {
     checkNsInstance(ns, '"getActiveSourceFiles"');
     // Find out what source files the user has unlocked
     let dictSourceFiles;
     try {
-        dictSourceFiles = await fnGetNsDataThroughFile(ns, `Object.fromEntries(ns.getOwnedSourceFiles().map(sf => [sf.n, sf.lvl]))`, '/Temp/owned-source-files.txt');
+        dictSourceFiles = await fnGetNsDataThroughFile(ns,
+            `Object.fromEntries(ns.singularity.getOwnedSourceFiles().map(sf => [sf.n, sf.lvl]))`,
+            '/Temp/owned-source-files.txt');
     } catch { dictSourceFiles = {}; } // If this fails (e.g. low RAM), return an empty dictionary
     // If the user is currently in a given bitnode, they will have its features unlocked
     if (includeLevelsFromCurrentBitnode) {
         try {
-            const bitNodeN = (await fnGetNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')).bitNodeN;
-            dictSourceFiles[bitNodeN] = Math.max(3, dictSourceFiles[bitNodeN] || 0);
+            const currentNode = (await fnGetNsDataThroughFile(ns, 'ns.getResetInfo()', '/Temp/reset-info.txt')).currentNode;
+            dictSourceFiles[currentNode] = Math.max(3, dictSourceFiles[currentNode] || 0);
         } catch { /* We are expected to be fault-tolerant in low-ram conditions */ }
     }
     return dictSourceFiles;
@@ -391,24 +445,31 @@ export async function instanceCount(ns, onHost = "home", warn = true, tailOtherI
     return others.length;
 }
 
-let cachedStockSymbols; // Cache of stock symbols since these never change
+let cachedStockSymbols = null; // Cache of stock symbols since these never change
+
+/** Helper function to get all stock symbols, or null if you do not have TIX api access.
+ * Caches symbols the first time they are successfully requested, since symbols never change.
+ * @param {NS} ns */
+export async function getStockSymbols(ns) {
+    cachedStockSymbols ??= await getNsDataThroughFile(ns,
+        `(() => { try { return ns.stock.getSymbols(); } catch { return null; } })()`,
+        '/Temp/stock-symbols.txt');
+    return cachedStockSymbols;
+}
 
 /** Helper function to get the total value of stocks using as little RAM as possible.
- * @param {NS} ns
- * @param {Player} player - If you have previously retrieve player info, you can provide that here to save some time.
- * @param {string[]} stockSymbols - If you have previously retrieved a list of all stock symbols, you can provide that here to save some time. */
-export async function getStocksValue(ns, player = null, stockSymbols = null) {
-    if (!(player || await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/getPlayer.txt')).hasTixApiAccess) return 0;
-    if (!stockSymbols || stockSymbols.length == 0) {
-        if (!cachedStockSymbols)
-            cachedStockSymbols = await getNsDataThroughFile(ns, `ns.stock.getSymbols()`, '/Temp/stock-symbols.txt');
-        stockSymbols = cachedStockSymbols;
-    }
-    const helper = async (fn) => await getNsDataThroughFile(ns,
-        `Object.fromEntries(ns.args.map(sym => [sym, ns.stock.${fn}(sym)]))`, `/Temp/stock-${fn}.txt`, stockSymbols);
-    const askPrices = await helper('getAskPrice');
-    const bidPrices = await helper('getBidPrice');
-    const positions = await helper('getPosition');
+ * @param {NS} ns */
+export async function getStocksValue(ns) {
+    let stockSymbols = await getStockSymbols(ns);
+    if (stockSymbols == null) return 0; // No TIX API Access
+    const stockGetAll = async (fn) => await getNsDataThroughFile(ns,
+        `(() => { try { return Object.fromEntries(ns.args.map(sym => [sym, ns.stock.${fn}(sym)])); } catch { return null; } })()`,
+        `/Temp/stock-${fn}-all.txt`, stockSymbols);
+    const askPrices = await stockGetAll('getAskPrice');
+    // Workaround for Bug #304: If we lost TIX access, our cache of stock symbols will still be valid, but we won't be able to get prices.
+    if (askPrices == null) return 0; // No TIX API Access
+    const bidPrices = await stockGetAll('getBidPrice');
+    const positions = await stockGetAll('getPosition');
     return stockSymbols.map(sym => ({ sym, pos: positions[sym], ask: askPrices[sym], bid: bidPrices[sym] }))
         .reduce((total, stk) => total + (stk.pos[0] * stk.bid) /* Long Value */ + stk.pos[2] * (stk.pos[3] * 2 - stk.ask) /* Short Value */
             // Subtract commission only if we have one or more shares (this is money we won't get when we sell our position)
@@ -419,7 +480,7 @@ export async function getStocksValue(ns, player = null, stockSymbols = null) {
 /** @param {NS} ns 
  * Returns a helpful error message if we forgot to pass the ns instance to a function */
 export function checkNsInstance(ns, fnName = "this function") {
-    if (!ns.print) throw Error(`The first argument to ${fnName} should be a 'ns' instance.`);
+    if (ns === undefined || !ns.print) throw new Error(`The first argument to ${fnName} should be a 'ns' instance.`);
     return ns;
 }
 
@@ -445,9 +506,9 @@ export function getConfiguration(ns, argsSchema) {
                 const matchIndex = overriddenSchema.findIndex(o => o[0] == key);
                 const match = matchIndex === -1 ? null : overriddenSchema[matchIndex];
                 if (!match)
-                    throw Error(`Unrecognized key "${key}" does not match of this script's options: ` + JSON.stringify(argsSchema.map(a => a[0])));
+                    throw new Error(`Unrecognized key "${key}" does not match of this script's options: ` + JSON.stringify(argsSchema.map(a => a[0])));
                 else if (override === undefined)
-                    throw Error(`The key "${key}" appeared in the config with no value. Some value must be provided. Try null?`);
+                    throw new Error(`The key "${key}" appeared in the config with no value. Some value must be provided. Try null?`);
                 else if (match && JSON.stringify(match[1]) != JSON.stringify(override)) {
                     if (typeof (match[1]) !== typeof (override))
                         log(ns, `WARNING: The "${confName}" overriding "${key}" value: ${JSON.stringify(override)} has a different type (${typeof override}) than the ` +
@@ -503,4 +564,16 @@ export function getConfiguration(ns, argsSchema) {
                     : `\nThis error may have been caused by your local overriding "${confName}" (especially if you changed the types of any options):\n${overrides}`), true);
         return null; // Caller should handle null and shut down elegantly.
     }
+}
+
+/** In order to pass in args to pass along to the startup/completion script, they may have to be quoted, when given as
+ * parameters to this script, but those quotes will have to be stripped when passing these along to a subsequent script as raw strings.
+ * @param {string[]} args - The the array-argument passed to the script.
+ * @returns {string[]} The the array-argument unescaped (or deserialized if a single argument starting with '[' was supplied]). */
+export function unEscapeArrayArgs(args) {
+    // For convenience, also support args as a single stringified array
+    if (args.length == 1 && args[0].startsWith("[")) return JSON.parse(args[0]);
+    // Otherwise, args wrapped in quotes should have those quotes removed.
+    const escapeChars = ['"', "'", "`"];
+    return args.map(arg => escapeChars.some(c => arg.startsWith(c) && arg.endsWith(c)) ? arg.slice(1, -1) : arg);
 }

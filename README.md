@@ -4,9 +4,11 @@ If you manually `nano git-pull.js` from the terminal and copy the [contents of t
 
 # Running scripts
 
-Scripts can mostly be run on their own, but are primarily designed to be orchestrated by `daemon.js`. If you `run daemon.js` from the terminal, it will start several other scripts.
+If you `run autopilot.js` from the terminal, it will start several other scripts.
 
-Note that a new "master orchestrator" script named `autopilot.js` is also in the works. On top of running `daemon.js` and its suite of scripts, it will monitor your progress throughout the game and take special actions when it can. I don't want to spoil too much for those new to the game, but it's worth mentioning that `SF4` is not required, but is highly-recommended to get the full benefit of this script.
+You can think of this as the "master orchestrator" script. It will kick off `daemon.js` (you primary hacking script), which in turn kicks off several other helper-scripts. It will monitor your progress throughout the game and take special actions when it can. I don't want to spoil too much for those new to the game, but it's worth mentioning that `SF4` is not required, but is highly-recommended to get the full benefit of this script.
+
+Most scripts can also be run on their own, but are primarily designed to be orchestrated by `autopilot.js` or `daemon.js`.
 
 ## Manually run scripts
 
@@ -17,7 +19,7 @@ You will also see an error-version of this dialog if you make a mistake in how y
 
 If you have personal preference and wish to "permanently" change the configuration of one of my scripts, you can do so without sacrificing your ability to "git-pull.js" the latest - simply [create a custom `config.txt`](https://github.com/alainbryden/bitburner-scripts/edit/main/README.md#config-files) file for the script.
 
-_Note:_ `daemon.js` will already run many instances of scripts with default arguments. If you wish to run them with special arguments, you must either kill the daemon's version or simply run with your desired arguments before starting daemon.js. Daemon.js will only start scripts that are not already running (regardless of the arguments of the currently running instance.)
+_Note:_ `autopilot.js` (and in turn, `daemon.js`) will already run many instances of scripts with default arguments. If you wish to run them with special arguments, you must either kill the default version or simply run scripts with your desired arguments **before** starting daemon.js. Daemon.js will only start scripts that are not already running (regardless of the arguments of the currently running instance.)
 
 ## Brief description of Scripts
 
@@ -25,7 +27,7 @@ Here are scripts that you may want to manually run, roughly in the order in whic
 
 - `git-pull.js` - Hopefully you used this to download the scripts. Run it whenever you want to update.
 - `scan.js` - Shows you the entire server network and important information about each server. A nice replacement for the built-in `scan` and/or `scan-analyze` commands, with support for unlimited depth.
-- `autopilot.js` - Plays the game for you (more or less), but is a work in progress.
+- `autopilot.js` - Plays the game for you (more or less).
 - `daemon.js` - Automates hacking and infrastructure, and kicking off various scripts to take advantage of other mechanics in the game as you unlock them.
 - `casino.js` - The first time you run this may come as a surprise, it will play blackjack and reload the game if it loses (automated save-scumming). Once you win 10b, you cannot enter the casino any more. Great way to boost your progress once you make the initial 200k needed to travel to Aevum and use the casino. For best performance, run `kill-all-scripts.js` before you run this, since other running scripts slow down the game's load time.
 - `reserve.js` - A simple way to reserve money across all scripts, in case you wanted to be certain to save up for something. e.g. `run reserve.js 200k` will reserve the $200,000 needed to get `casino.js` going.
@@ -56,9 +58,9 @@ You may find it useful to set up one or more aliases with the default options yo
 
 - `alias git-pull="run git-pull.js"`
   - Makes auto-updating just a little easier.
-- `alias start="run daemon.js -v --stock-manipulation --tail"`
-  - This way I can just enter `start` in the terminal after each reset, and the rest is handled automatically.
-- `alias stop="home; kill daemon.js -v --stock-manipulation; run kill-all-scripts.js"`
+- `alias start="run autopilot.js"`
+- `alias stop="home; kill autopilot.js ; kill daemon.js ; run kill-all-scripts.js"`
+  - Quick way to start/stop the system. I personally now use `auto` instead of `start` for this alias (auto => autopilot.js).
 - `alias sscan="home; run scan.js"`
   - Makes it a little quicker to run this custom-scan routine, which shows the entire network, stats about servers, and provides handy links for jumping to servers or backdooring them.
 - `alias do="run run-command.js"`
@@ -95,8 +97,8 @@ You may find it useful to set up one or more aliases with the default options yo
   - Runs daemon in a way that focuses on earning hack XP income as quickly as possible. Only practical when you have a lot of home-ram.
 - `alias start-tight="run daemon.js --looping-mode --recovery-thread-padding 30 --cycle-timing-delay 2000 --queue-delay 10 --stock-manipulation-focus --tail --silent-misfires --initial-max-targets 64"`
   - Let this be a hint as to how customizable some of these scripts are (without editing the source code). The above alias is powerful when you are end-of-bn and your hacking skill is very high (8000+), so hack/grow/weaken times are very fast (milliseconds). You can greatly increase productivity and reduce lag by switching to this `--looping-mode` which creates long-lived hack/grow/weaken scripts that run in a loop. This, in addition to the tighter cycle-timing makes them more vulnerable to misfiring (completing out-of-order), but adding recovery thread padding (a multiple on the number of grow/weaken threads to use) can quickly recover from misfires. Note that if you don't yet have enough home-ram to support such a high recovery-thread multiple, you can start lower (5 or 10) then buy more home ram and work your way up.
-- `alias ascend="run ascend.js --prioritize-augmentations --reset"`
-  - A good way to finish your node. I personally `--prioritize-augmentations` when resetting, because I have all SF bonuses unlocked, but until you have SF11.3 for aug cost reduction, you may want to leave the default which prioritizes upgrading home RAM as much as possible first.
+- `alias ascend="run ascend.js --install-augmentations"`
+  - A good way to finish your node. I personally prioritize augmentations when resetting, because I have all SF bonuses unlocked, but until you have SF11.3 for aug cost reduction, you may want to use the `--prioritize-home-ram` flag which prioritizes upgrading home RAM as much as possible before buying as many augmentations as possible.
 
 ## Config Files
 
@@ -134,5 +136,5 @@ It's meant as an easy way for me to share code with friends, and track changes a
 While I do like my work to be helpful to others and re-used, I am only willing to put so much effort into customizing it to others' specific needs or whims.
 You should fork the code, and start tweaking it the way you want it to behave. That's more in the spirit of the game!
 
-Hit up the Bitburner Discord with any questions: https://discord.gg/Wjrs92b3
+Hit up the Bitburner Discord with any questions: [Bitburner#alains-scripts](https://discord.com/channels/415207508303544321/935667531111342200)
 Many helpful folks in there are familiar with my scripts or ones similar to them and can address your questions and concerns far quicker than I can.

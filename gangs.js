@@ -24,41 +24,42 @@ let lastTerritoryPower = 0
 let lastOtherGangInfo = null
 let lastLoopTime = null
 
-// Crime activity-related variables TODO all tasks list to evaluate
-const crimes = ['Mug People', 'Deal Drugs', 'Strongarm Civilians', 'Run a Con', 'Armed Robbery', 'Traffick Illegal Arms', 'Threaten & Blackmail', 'Human Trafficking', 'Terrorism',
-  'Ransomware', 'Phishing', 'Identity Theft', 'DDoS Attacks', 'Plant Virus', 'Fraud & Counterfeiting', 'Money Laundering', 'Cyberterrorism']
-let pctTraining = 0.20
-let multGangSoftcap
-let allTaskNames
-let allTaskStats
-const assignedTasks = {} // Each member will independently attempt to scale up the crime they perform until they are ineffective or we start generating wanted levels
-const lastMemberReset = {} // Tracks when each member last ascended
+// Crime activity-related variables
+const crimes = ["Mug People", "Deal Drugs", "Strongarm Civilians", "Run a Con", "Armed Robbery", "Traffick Illegal Arms", "Threaten & Blackmail", "Human Trafficking", "Terrorism",
+    "Ransomware", "Phishing", "Identity Theft", "DDoS Attacks", "Plant Virus", "Fraud & Counterfeiting", "Money Laundering", "Cyberterrorism"];
+let pctTraining = 0.20;
+let multGangSoftcap;
+let allTaskNames;
+let allTaskStats;
+let assignedTasks = {}; // Each member will independently attempt to scale up the crime they perform until they are ineffective or we start generating wanted levels
+let lastMemberReset = {}; // Tracks when each member last ascended
 
 // Global state
-let ownedSourceFiles
-let myGangFaction = ''
-let isHackGang = false
-let strWantedReduction
-let requiredRep = 0
-let myGangMembers = []
-let equipments = []
-let importantStats = []
+let resetInfo = (/**@returns{ResetInfo}*/() => undefined)(); // Information about the current bitnode
+let ownedSourceFiles;
+let myGangFaction = "";
+let isHackGang = false;
+let strWantedReduction;
+let requiredRep = 0;
+let myGangMembers = [];
+let equipments = [];
+let importantStats = [];
 
 let options
 const argsSchema = [
-  ['training-percentage', 0.05], // Spend this percent of time randomly training gang members versus doing crime
-  ['no-training', false], // Don't train unless all other tasks generate no gains
-  ['no-auto-ascending', false], // Don't ascend members
-  ['ascend-multi-threshold', 1.05], // Ascend member #12 if a primary stat multi would increase by more than this amount
-  ['ascend-multi-threshold-spacing', 0.05], // Members will space their acention multis by this amount to ensure they are ascending at different rates
-  // Note: given the above two defaults, members would ascend at multis [1.6, 1.55, 1.50, ..., 1.1, 1.05] once you have 12 members.
-  ['min-training-ticks', 10], // Require this many ticks of training after ascending or recruiting to rebuild stats
-  ['reserve', null], // Reserve this much cash before determining spending budgets (defaults to contents of reserve.txt if not specified)
-  ['augmentations-budget', null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickPermanentEquipment)
-  ['equipment-budget', null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickTransientEquipment)
-  ['money-focus', false], // Always optimize gang crimes for maximum monetary gain. Is otherwise balanced.
-  ['reputation-focus', false] // Always optimize gang crimes for maximum reputation gain. Is otherwise balanced.
-]
+    ['training-percentage', 0.05], // Spend this percent of time randomly training gang members versus doing crime
+    ['no-training', false], // Don't train unless all other tasks generate no gains or the member ascended recently (--min-training-ticks)
+    ['no-auto-ascending', false], // Don't ascend members
+    ['ascend-multi-threshold', 1.05], // Ascend member #12 if a primary stat multi would increase by more than this amount
+    ['ascend-multi-threshold-spacing', 0.05], // Members will space their acention multis by this amount to ensure they are ascending at different rates 
+    // Note: given the above two defaults, members would ascend at multis [1.6, 1.55, 1.50, ..., 1.1, 1.05] once you have 12 members.
+    ['min-training-ticks', 10], // Require this many ticks of training after ascending or recruiting to rebuild stats
+    ['reserve', null], // Reserve this much cash before determining spending budgets (defaults to contents of reserve.txt if not specified)
+    ['augmentations-budget', null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickPermanentEquipment)
+    ['equipment-budget', null], // Percentage of non-reserved cash to spend per tick on permanent member upgrades (If not specified, uses defaultMaxSpendPerTickTransientEquipment)
+    ['money-focus', false], // Always optimize gang crimes for maximum monetary gain. Is otherwise balanced.
+    ['reputation-focus', false], // Always optimize gang crimes for maximum reputation gain. Is otherwise balanced.
+];
 
 export function autocomplete (data, _) {
   data.flags(argsSchema)
@@ -87,150 +88,157 @@ export async function main (ns) {
 
 /** @param {NS} ns
  * One-time setup actions. **/
-async function initialize (ns) {
-  ns.disableLog('ALL')
-  pctTraining = options['no-training'] ? 0 : options['training-percentage']
+async function initialize(ns) {
+    ns.disableLog('ALL');
+    pctTraining = options['no-training'] ? 0 : options['training-percentage'];
 
-  let loggedWaiting = false
-  const bitNode = await getNsDataThroughFile(ns, 'ns.getPlayer().bitNodeN', '/Temp/getPlayer-bitNodeN.txt')
-  let haveJoinedAGang = false
-  while (!haveJoinedAGang) {
-    try {
-      haveJoinedAGang = await getNsDataThroughFile(ns, 'ns.gang.inGang()', '/Temp/gang-inGang.txt')
-      if (haveJoinedAGang) break
-      if (!loggedWaiting) {
-        log(ns, 'Waiting to be in a gang. Will create the highest faction gang as soon as it is available...')
-        loggedWaiting = true
-      }
-      if (bitNode === 2 || ns.heart.break() <= -54000) { await runCommand(ns, 'ns.args.forEach(g => ns.gang.createGang(g))', '/Temp/gang-createGang.js', gangsByPower) }
-    } catch (err) {
-      log(ns, 'WARNING: gangs.js Caught (and suppressed) an unexpected error while waiting to join a gang:\n' +
-                (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning')
+    let loggedWaiting = false;
+    resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
+    const bitNode = resetInfo.currentNode;
+    let haveJoinedAGang = false;
+    while (!haveJoinedAGang) {
+        try {
+            haveJoinedAGang = await getNsDataThroughFile(ns, 'ns.gang.inGang()');
+            if (haveJoinedAGang) break;
+            if (!loggedWaiting) {
+                log(ns, `Waiting to be in a gang. Will create the highest faction gang as soon as it is available...`);
+                loggedWaiting = true;
+            }
+            if (bitNode == 2 || ns.heart.break() <= -54000)
+                await runCommand(ns, `ns.args.forEach(g => ns.gang.createGang(g))`, '/Temp/gang-createGang.js', gangsByPower);
+        }
+        catch (err) {
+            log(ns, `WARNING: gangs.js Caught (and suppressed) an unexpected error while waiting to join a gang:\n` +
+                (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning');
+        }
+        await ns.sleep(1000);
     }
-    await ns.sleep(1000)
-  }
-  const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/getPlayer.txt')
-  log(ns, 'Collecting gang information...')
-  const myGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()', '/Temp/gang-getGangInformation.txt')
-  myGangFaction = myGangInfo.faction
-  if (loggedWaiting) { log(ns, `SUCCESS: Created gang ${myGangFaction} (At ${formatDuration(playerData.playtimeSinceLastBitnode)} into BitNode)`, true, 'success') }
-  isHackGang = myGangInfo.isHacking
-  strWantedReduction = isHackGang ? 'Ethical Hacking' : 'Vigilante Justice'
-  importantStats = isHackGang ? ['hack'] : ['str', 'def', 'dex', 'agi']
-  territoryNextTick = lastTerritoryPower = lastOtherGangInfo = null
-  territoryTickDetected = isReadyForNextTerritoryTick = warfareFinished = false
-  territoryTickWaitPadding = updateInterval
+    const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    log(ns, "Collecting gang information...");
+    const myGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
+    myGangFaction = myGangInfo.faction;
+    if (loggedWaiting)
+        log(ns, `SUCCESS: Created gang ${myGangFaction} (At ${formatDuration(Date.now() - resetInfo.lastNodeReset)} into BitNode)`, true, 'success');
+    isHackGang = myGangInfo.isHacking;
+    strWantedReduction = isHackGang ? "Ethical Hacking" : "Vigilante Justice";
+    importantStats = isHackGang ? ["hack"] : ["str", "def", "dex", "agi"];
+    territoryNextTick = lastTerritoryPower = lastOtherGangInfo = null;
+    territoryTickDetected = isReadyForNextTerritoryTick = warfareFinished = false;
+    territoryTickWaitPadding = updateInterval;
 
-  // If possible, determine how much rep we would need to get the most expensive unowned augmentation
-  const sf4Level = ownedSourceFiles[4] || 0
-  requiredRep = 2.5e6
-  if (sf4Level === 0) { log(ns, 'INFO: SF4 required to get gang augmentation info. Defaulting to assuming ~2.5 million rep is desired.') } else {
-    try {
-      if (sf4Level < 3) {
-        log(ns, 'WARNING: This script makes use of singularity functions, which are quite expensive before you have SF4.3. ' +
-                    'Unless you have a lot of free RAM for temporary scripts, you may get runtime errors.')
-      }
-      const augmentationNames = await getNsDataThroughFile(ns, `ns.getAugmentationsFromFaction('${myGangFaction}')`, '/Temp/gang-augs.txt')
-      const ownedAugmentations = await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations(true)', '/Temp/player-augs-purchased.txt')
-      const dictAugRepReqs = await getDict(ns, augmentationNames, 'getAugmentationRepReq', '/Temp/aug-repreqs.txt')
-      // Due to a bug, gangs appear to provide "The Red Pill" even when it's unavailable (outside of BN2), so ignore this one.
-      requiredRep = augmentationNames.filter(aug => !ownedAugmentations.includes(aug) && aug !== 'The Red Pill').reduce((max, aug) => Math.max(max, dictAugRepReqs[aug]), -1)
-      log(ns, `Highest augmentation reputation cost is ${formatNumberShort(requiredRep)}`)
-    } catch {
-      log(ns, `WARNING: Failed to get augmentation info despite having SF4.${sf4Level}. This may be due to you having insufficient RAM to launch the temporary scripts. ` +
-                'Proceeding with the default assumption that ~2.5 million rep is desired.')
+    // If possible, determine how much rep we would need to get the most expensive unowned augmentation
+    const sf4Level = ownedSourceFiles[4] || 0;
+    requiredRep = 2.5e6;
+    if (sf4Level == 0)
+        log(ns, `INFO: SF4 required to get gang augmentation info. Defaulting to assuming ~2.5 million rep is desired.`);
+    else {
+        try {
+            if (sf4Level < 3)
+                log(ns, `WARNING: This script makes use of singularity functions, which are quite expensive before you have SF4.3. ` +
+                    `Unless you have a lot of free RAM for temporary scripts, you may get runtime errors.`);
+            const augmentationNames = await getNsDataThroughFile(ns, `ns.singularity.getAugmentationsFromFaction(ns.args[0])`, null, [myGangFaction]);
+            const ownedAugmentations = await getNsDataThroughFile(ns, `ns.singularity.getOwnedAugmentations(true)`, '/Temp/player-augs-purchased.txt');
+            const dictAugRepReqs = await getDict(ns, augmentationNames, 'singularity.getAugmentationRepReq', '/Temp/aug-repreqs.txt');
+            // Due to a bug, gangs appear to provide "The Red Pill" even when it's unavailable (outside of BN2), so ignore this one.
+            requiredRep = augmentationNames.filter(aug => !ownedAugmentations.includes(aug) && aug != "The Red Pill").reduce((max, aug) => Math.max(max, dictAugRepReqs[aug]), -1);
+            log(ns, `Highest augmentation reputation cost is ${formatNumberShort(requiredRep)}`);
+        } catch {
+            log(ns, `WARNING: Failed to get augmentation info despite having SF4.${sf4Level}. This may be due to you having insufficient RAM to launch the temporary scripts. ` +
+                `Proceeding with the default assumption that ~2.5 million rep is desired.`);
+        }
     }
-  }
 
-  // Initialize equipment information
-  const equipmentNames = await getNsDataThroughFile(ns, 'ns.gang.getEquipmentNames()', '/Temp/gang-getEquipmentNames.txt')
-  const dictEquipmentTypes = await getGangInfoDict(ns, equipmentNames, 'getEquipmentType')
-  const dictEquipmentCosts = await getGangInfoDict(ns, equipmentNames, 'getEquipmentCost')
-  const dictEquipmentStats = await getGangInfoDict(ns, equipmentNames, 'getEquipmentStats')
-  equipments = equipmentNames.map((equipmentName) => ({
-    name: equipmentName,
-    type: dictEquipmentTypes[equipmentName],
-    cost: dictEquipmentCosts[equipmentName],
-    stats: dictEquipmentStats[equipmentName]
-  })).sort((a, b) => a.cost - b.cost)
-  // log(ns, JSON.stringify(equipments));
-  // Initialize information about gang members and crimes
-  allTaskNames = await getNsDataThroughFile(ns, 'ns.gang.getTaskNames()', '/Temp/gang-getTaskNames.txt')
-  allTaskStats = await getGangInfoDict(ns, allTaskNames, 'getTaskStats')
-  multGangSoftcap = (await tryGetBitNodeMultipliers(ns))?.GangSoftcap || 1
-  myGangMembers = await getNsDataThroughFile(ns, 'ns.gang.getMemberNames()', '/Temp/gang-getMemberNames.txt')
-  const dictMembers = await getGangInfoDict(ns, myGangMembers, 'getMemberInformation')
-  for (const member of Object.values(dictMembers)) { // Initialize the current activity of each member
-    assignedTasks[member.name] = (member.task && member.task !== 'Unassigned') ? member.task : ('Train ' + (isHackGang ? 'Hacking' : 'Combat'))
-  }
-  while (myGangMembers.length < 3) await doRecruitMember(ns) // We should be able to recruit our first three members immediately (for free)
-  // Peform all updates / actions normally performed on territory tick (every 20 seconds) once before starting the main loop
-  lastLoopTime = Date.now()
-  await onTerritoryTick(ns, myGangInfo)
-  lastTerritoryPower = myGangInfo.power
+    // Initialize equipment information
+    const equipmentNames = await getNsDataThroughFile(ns, 'ns.gang.getEquipmentNames()');
+    const dictEquipmentTypes = await getGangInfoDict(ns, equipmentNames, 'getEquipmentType');
+    const dictEquipmentCosts = await getGangInfoDict(ns, equipmentNames, 'getEquipmentCost');
+    const dictEquipmentStats = await getGangInfoDict(ns, equipmentNames, 'getEquipmentStats');
+    equipments = equipmentNames.map((equipmentName) => ({
+        name: equipmentName,
+        type: dictEquipmentTypes[equipmentName],
+        cost: dictEquipmentCosts[equipmentName],
+        stats: dictEquipmentStats[equipmentName],
+    })).sort((a, b) => a.cost - b.cost);
+    //log(ns, JSON.stringify(equipments));
+    // Initialize information about gang members and crimes
+    allTaskNames = await getNsDataThroughFile(ns, 'ns.gang.getTaskNames()')
+    allTaskStats = await getGangInfoDict(ns, allTaskNames, 'getTaskStats');
+    multGangSoftcap = (await tryGetBitNodeMultipliers(ns))?.GangSoftcap || 1;
+    myGangMembers = await getNsDataThroughFile(ns, 'ns.gang.getMemberNames()');
+    const dictMembers = await getGangInfoDict(ns, myGangMembers, 'getMemberInformation');
+    for (const member of Object.values(dictMembers)) // Initialize the current activity of each member
+        assignedTasks[member.name] = (member.task && member.task !== "Unassigned") ? member.task : ("Train " + (isHackGang ? "Hacking" : "Combat"));
+    while (myGangMembers.length < 3) await doRecruitMember(ns); // We should be able to recruit our first three members immediately (for free)
+    // Peform all updates / actions normally performed on territory tick (every 20 seconds) once before starting the main loop
+    lastLoopTime = Date.now()
+    await onTerritoryTick(ns, myGangInfo);
+    lastTerritoryPower = myGangInfo.power;
 }
 
 /** @param {NS} ns
  * Executed every `interval` **/
-async function mainLoop (ns) {
-  // Update gang information (specifically monitoring gang power to see when territory ticks)
-  const myGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()', '/Temp/gang-info.txt')
-  const thisLoopStart = Date.now()
-  if (!territoryTickDetected) { // Detect the first territory tick by watching for other gang's territory power to update.
-    const otherGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getOtherGangInformation()', '/Temp/gang-other-gang-info.txt') // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
-    if (lastOtherGangInfo != null && JSON.stringify(otherGangInfo) !== JSON.stringify(lastOtherGangInfo)) {
-      territoryNextTick = lastLoopTime + territoryTickTime
-      territoryTickDetected = true
-      log(ns, `INFO: Others gangs power updated (sometime in the past ${formatDuration(thisLoopStart - lastLoopTime)}. ` +
-                `Will start waiting for next tick in: ${formatDuration(territoryNextTick - thisLoopStart - territoryTickWaitPadding)}`, false, 'warning')
-    } else if (lastOtherGangInfo == null) { log(ns, `INFO: Waiting to detect territory to tick. (Waiting for other gangs' power to update.) Will check every ${formatDuration(updateInterval)}...`) }
-    lastOtherGangInfo = otherGangInfo
-  }
-  // If territory is close to ticking, quick - set everyone to do "territory warfare"! Once we hit 100% territory, there's no need to keep swapping members to warfare
-  if (!warfareFinished && !isReadyForNextTerritoryTick && (thisLoopStart + updateInterval + territoryTickWaitPadding >= territoryNextTick)) { // Start 1 second early to be safe
-    isReadyForNextTerritoryTick = true
-    await updateMemberActivities(ns, null, 'Territory Warfare', myGangInfo)
-  }
-  // Detect if territory power has been updated in the last tick (or if we have no power, assume it has ticked and we just haven't generated power yet)
-  if ((isReadyForNextTerritoryTick && myGangInfo.power !== lastTerritoryPower) || (thisLoopStart > territoryNextTick + 5000 /* Wait up to 5 additional seconds in case time was wonkey */)) {
-    await onTerritoryTick(ns, myGangInfo) // Do most things only once per territory tick
-    isReadyForNextTerritoryTick = false
-    lastTerritoryPower = myGangInfo.power
-  } else if (isReadyForNextTerritoryTick) { log(ns, `INFO: Waiting for territory to tick. (Waiting for gang power to change from ${formatNumberShort(lastTerritoryPower)}. ETA: ${formatDuration(territoryNextTick - thisLoopStart)}`) }
-  lastLoopTime = thisLoopStart // Due to periodic lag, we must track the last time we checked, can't assume it was `updateInterval` ago.
+async function mainLoop(ns) {
+    // Update gang information (specifically monitoring gang power to see when territory ticks)
+    const myGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
+    const thisLoopStart = Date.now();
+    if (!territoryTickDetected) { // Detect the first territory tick by watching for other gang's territory power to update.
+        const otherGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getOtherGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
+        if (lastOtherGangInfo != null && JSON.stringify(otherGangInfo) != JSON.stringify(lastOtherGangInfo)) {
+            territoryNextTick = lastLoopTime + territoryTickTime;
+            territoryTickDetected = true;
+            log(ns, `INFO: Others gangs power updated (sometime in the past ${formatDuration(thisLoopStart - lastLoopTime)}. ` +
+                `Will start waiting for next tick in: ${formatDuration(territoryNextTick - thisLoopStart - territoryTickWaitPadding)}`, false);
+        } else if (lastOtherGangInfo == null)
+            log(ns, `INFO: Waiting to detect territory to tick. (Waiting for other gangs' power to update.) Will check every ${formatDuration(updateInterval)}...`);
+        lastOtherGangInfo = otherGangInfo;
+    }
+    // If territory is close to ticking, quick - set everyone to do "territory warfare"! Once we hit 100% territory, there's no need to keep swapping members to warfare
+    if (!warfareFinished && !isReadyForNextTerritoryTick && (thisLoopStart + updateInterval + territoryTickWaitPadding >= territoryNextTick)) { // Start 1 second early to be safe
+        isReadyForNextTerritoryTick = true;
+        await updateMemberActivities(ns, null, "Territory Warfare", myGangInfo);
+    }
+    // Detect if territory power has been updated in the last tick (or if we have no power, assume it has ticked and we just haven't generated power yet)
+    if ((isReadyForNextTerritoryTick && myGangInfo.power != lastTerritoryPower) || (thisLoopStart > territoryNextTick + 5000 /* Wait up to 5 additional seconds in case time was wonkey */)) {
+        await onTerritoryTick(ns, myGangInfo); //Do most things only once per territory tick
+        isReadyForNextTerritoryTick = false;
+        lastTerritoryPower = myGangInfo.power;
+    } else if (isReadyForNextTerritoryTick)
+        log(ns, `INFO: Waiting for territory to tick. (Waiting for gang power to change from ${formatNumberShort(lastTerritoryPower)}. ETA: ${formatDuration(territoryNextTick - thisLoopStart)}`);
+    lastLoopTime = thisLoopStart; // Due to periodic lag, we must track the last time we checked, can't assume it was `updateInterval` ago.
 }
 
 /** @param {NS} ns
  * Do some things only once per territory tick **/
-async function onTerritoryTick (ns, myGangInfo) {
-  territoryNextTick = lastLoopTime + territoryTickTime / (ns.gang.getBonusTime() > 0 ? 5 : 1) // Reset the time the next tick will occur
-  if (lastTerritoryPower !== myGangInfo.power || lastTerritoryPower == null) {
-    log(ns, `Territory power updated from ${formatNumberShort(lastTerritoryPower)} to ${formatNumberShort(myGangInfo.power)}.`)
-    consecutiveTerritoryDetections++
-    if (consecutiveTerritoryDetections > 5 && territoryTickWaitPadding > updateInterval) { territoryTickWaitPadding = Math.max(updateInterval, territoryTickWaitPadding - updateInterval) }
-  } else if (!warfareFinished) {
-    log(ns, 'WARNING: Power stats weren\'t updated, assuming we\'ve lost track of territory tick', false, 'warning')
-    consecutiveTerritoryDetections = 0
-    territoryTickWaitPadding = Math.min(2000, territoryTickWaitPadding + updateInterval) // Start waiting earlier to account for observed lag.
-    territoryNextTick -= updateInterval // Prep for the next tick a little earlier, in case we just lagged behind the tick by a bit.
-    territoryTickDetected = false
-    lastOtherGangInfo = null
-  }
+async function onTerritoryTick(ns, myGangInfo) {
+    territoryNextTick = lastLoopTime + territoryTickTime / (ns.gang.getBonusTime() > 0 ? 5 : 1); // Reset the time the next tick will occur
+    if (lastTerritoryPower != myGangInfo.power || lastTerritoryPower == null) {
+        log(ns, `Territory power updated from ${formatNumberShort(lastTerritoryPower)} to ${formatNumberShort(myGangInfo.power)}.`)
+        consecutiveTerritoryDetections++;
+        if (consecutiveTerritoryDetections > 5 && territoryTickWaitPadding > updateInterval)
+            territoryTickWaitPadding = Math.max(updateInterval, territoryTickWaitPadding - updateInterval);
+    } else if (!warfareFinished) {
+        log(ns, `WARNING: Power stats weren't updated, assuming we've lost track of territory tick`, false,
+            consecutiveTerritoryDetections == 0 ? 'warning' : null); // Only pop-up a warning if this happens two territory ticks in a row (or more)
+        consecutiveTerritoryDetections = 0;
+        territoryTickWaitPadding = Math.min(2000, territoryTickWaitPadding + updateInterval); // Start waiting earlier to account for observed lag.
+        territoryNextTick -= updateInterval; // Prep for the next tick a little earlier, in case we just lagged behind the tick by a bit.
+        territoryTickDetected = false;
+        lastOtherGangInfo = null;
+    }
 
-  // Update gang members in case someone died in a clash
-  myGangMembers = await getNsDataThroughFile(ns, 'ns.gang.getMemberNames()', '/Temp/gang-member-names.txt')
-  const nextMemberCost = Math.pow(5, myGangMembers.length - (3 /* numFreeMembers */ - 1))
-  if (myGangMembers.length < 12 /* Game Max */ && myGangInfo.respect * 0.75 > nextMemberCost) { // Don't spend more than 75% of our respect on new members.
-    await doRecruitMember(ns) // Recruit new members if available
-  }
-  const dictMembers = await getGangInfoDict(ns, myGangMembers, 'getMemberInformation')
-  if (!options['no-auto-ascending']) await tryAscendMembers(ns) // Ascend members if we deem it a good time
-  await tryUpgradeMembers(ns, dictMembers) // Upgrade members if possible
-  await enableOrDisableWarfare(ns, myGangInfo) // Update whether we should be participating in gang warfare
-  // There's a chance we do training instead of work for this next tick. If training, we primarily train our main stat, with a small chance to train less-important stats
-  const task = Math.random() >= pctTraining ? null : 'Train ' + (Math.random() < 0.1 ? 'Charisma' : Math.random() < (isHackGang ? 0.1 : 0.9) ? 'Combat' : 'Hacking')
-  await updateMemberActivities(ns, dictMembers, task) // Set everyone working on the next activity
-  if (!task) await optimizeGangCrime(ns, await waitForGameUpdate(ns, myGangInfo)) // Finally, see if we can improve rep gain rates by micro-optimizing individual member crimes
+    // Update gang members in case someone died in a clash
+    myGangMembers = await getNsDataThroughFile(ns, 'ns.gang.getMemberNames()');
+    const nextMemberCost = Math.pow(5, myGangMembers.length - (3 /*numFreeMembers*/ - 1));
+    if (myGangMembers.length < 12 /* Game Max */ && myGangInfo.respect >= nextMemberCost)
+        await doRecruitMember(ns) // Recruit new members if available
+    const dictMembers = await getGangInfoDict(ns, myGangMembers, 'getMemberInformation');
+    if (!options['no-auto-ascending']) await tryAscendMembers(ns); // Ascend members if we deem it a good time
+    await tryUpgradeMembers(ns, dictMembers); // Upgrade members if possible
+    await enableOrDisableWarfare(ns, myGangInfo); // Update whether we should be participating in gang warfare
+    // There's a chance we do training instead of work for this next tick. If training, we primarily train our main stat, with a small chance to train less-important stats
+    const task = Math.random() >= pctTraining ? null : "Train " + (Math.random() < 0.1 ? "Charisma" : Math.random() < (isHackGang ? 0.1 : 0.9) ? "Combat" : "Hacking")
+    await updateMemberActivities(ns, dictMembers, task); // Set everyone working on the next activity
+    if (!task) await optimizeGangCrime(ns, await waitForGameUpdate(ns, myGangInfo));  // Finally, see if we can improve rep gain rates by micro-optimizing individual member crimes
 }
 
 /** @param {NS} ns
@@ -252,53 +260,42 @@ async function updateMemberActivities (ns, dictMemberInfo = null, forceTask = nu
 
 /** @param {NS} ns
  * Logic to assign tasks that maximize rep gain rate without wanted gain getting out of control **/
-async function optimizeGangCrime (ns, myGangInfo) {
-  const dictMembers = await getGangInfoDict(ns, myGangMembers, 'getMemberInformation')
-  // Tolerate our wanted level increasing, as long as reputation increases several orders of magnitude faster and we do not currently have a penalty more than -0.01%
-  const currentWantedPenalty = getWantedPenalty(myGangInfo) - 1
-  // Note, until we have ~200 respect, the best way to recover from wanted penalty is to focus on gaining respect, rather than doing vigilante work.
-  const wantedGainTolerance = currentWantedPenalty < -1.1 * wantedPenaltyThreshold && myGangInfo.wantedLevel >= (1.1 + myGangInfo.respect / 1000) && myGangInfo.respect > 200
-    ? -0.01 * myGangInfo.wantedLevel
-    : /* Recover from wanted penalty */ currentWantedPenalty < -0.9 * wantedPenaltyThreshold && myGangInfo.wantedLevel >= (1.1 + myGangInfo.respect / 10000)
-      ? 0
-      : /* Sustain */ Math.max(myGangInfo.respectGainRate / 1000, myGangInfo.wantedLevel / 10) /* Allow wanted to increase at a manageable rate */
-  const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')
-  // Find out how much reputation we need, without SF4, we estimate gang faction rep based on current gang rep
-  let factionRep = -1
-  if (ownedSourceFiles[4] > 0) {
-    try { factionRep = await getNsDataThroughFile(ns, 'ns.getFactionRep(ns.args[0])', '/Temp/getFactionRep.txt', [myGangFaction]) } catch { log(ns, 'INFO: Error suppressed. Falling back to estimating current gang faction rep.') }
-  }
-  if (factionRep === -1) { // Estimate current gang rep based on respect. Game gives 1/75 rep / respect. This is an underestimate, because it doesn't take into account spent/lost respect on ascend/recruit/death.
-    factionRep = myGangInfo.respect / 75
-  }
-  const optStat = options['reputation-focus']
-    ? 'respect'
-    : options['money-focus']
-      ? 'money'
-      // If not specified, automatically change focus based on achieved rep/money
-      : factionRep > requiredRep
-        ? 'money'
-        : (playerData.money > 1E11 || myGangInfo.respect) < 9000
-            ? 'respect'
-            : 'both money and respect'
-  // Pre-compute how every gang member will perform at every task
-  const memberTaskRates = Object.fromEntries(Object.values(dictMembers).map(m => [m.name, allTaskNames.map(taskName => ({
-    name: taskName,
-    respect: computeRepGains(myGangInfo, taskName, m),
-    money: calculateMoneyGains(myGangInfo, taskName, m),
-    wanted: computeWantedGains(myGangInfo, taskName, m)
-  })).filter(task => task.wanted <= 0 || task.money > 0 || task.respect > 0)])) // Completely remove tasks that offer no gains, but would generate wanted levels
-  // Sort tasks by best gain rate
-  if (optStat === 'both money and respect') {
-    Object.values(memberTaskRates).flat().forEach(v => {
-      v[optStat] = v.money / 1000 + v.respect // Hack to support a "optimized total" stat when trying to balance both money and wanted
-      return v[optStat]
-    })
-    Object.values(memberTaskRates).forEach((tasks, idx) => tasks.sort((a, b) => idx % 2 === 0 ? b.respect - a.respect : b.money - a.money)) // Hack: Even members prioritize respect, odd money
-  } else {
-    Object.values(memberTaskRates).forEach(tasks => tasks.sort((a, b) => b[optStat] - a[optStat]))
-  }
-  // ns.print(memberTaskRates);
+async function optimizeGangCrime(ns, myGangInfo) {
+    const dictMembers = await getGangInfoDict(ns, myGangMembers, 'getMemberInformation');
+    // Tolerate our wanted level increasing, as long as reputation increases several orders of magnitude faster and we do not currently have a penalty more than -0.01%
+    let currentWantedPenalty = getWantedPenalty(myGangInfo) - 1;
+    // Note, until we have ~200 respect, the best way to recover from wanted penalty is to focus on gaining respect, rather than doing vigilante work.
+    let wantedGainTolerance = currentWantedPenalty < -1.1 * wantedPenaltyThreshold && myGangInfo.wantedLevel >= (1.1 + myGangInfo.respect / 1000) &&
+        myGangInfo.respect > 200 ? -0.01 * myGangInfo.wantedLevel /* Recover from wanted penalty */ :
+        currentWantedPenalty < -0.9 * wantedPenaltyThreshold && myGangInfo.wantedLevel >= (1.1 + myGangInfo.respect / 10000) ? 0 /* Sustain */ :
+            Math.max(myGangInfo.respectGainRate / 1000, myGangInfo.wantedLevel / 10) /* Allow wanted to increase at a manageable rate */;
+    const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    // Find out how much reputation we need, without SF4, we estimate gang faction rep based on current gang rep
+    let factionRep = -1;
+    if (ownedSourceFiles[4] > 0) {
+        try { factionRep = await getNsDataThroughFile(ns, `ns.singularity.getFactionRep(ns.args[0])`, null, [myGangFaction]); }
+        catch { log(ns, 'INFO: Error suppressed. Falling back to estimating current gang faction rep.'); }
+    }
+    if (factionRep == -1) // Estimate current gang rep based on respect. Game gives 1/75 rep / respect. This is an underestimate, because it doesn't take into account spent/lost respect on ascend/recruit/death. 
+        factionRep = myGangInfo.respect / 75;
+    const optStat = options['reputation-focus'] ? "respect" : options['money-focus'] ? "money" :
+        // If not specified, automatically change focus based on achieved rep/money
+        factionRep > requiredRep ? "money" : (playerData.money > 1E11 || myGangInfo.respect) < 9000 ? "respect" : "both money and respect";
+    // Pre-compute how every gang member will perform at every task
+    const memberTaskRates = Object.fromEntries(Object.values(dictMembers).map(m => [m.name, allTaskNames.map(taskName => ({
+        name: taskName,
+        respect: computeRepGains(myGangInfo, taskName, m),
+        money: calculateMoneyGains(myGangInfo, taskName, m),
+        wanted: computeWantedGains(myGangInfo, taskName, m),
+    })).filter(task => task.wanted <= 0 || task.money > 0 || task.respect > 0)])); // Completely remove tasks that offer no gains, but would generate wanted levels
+    // Sort tasks by best gain rate
+    if (optStat == "both money and respect") {
+        Object.values(memberTaskRates).flat().forEach(v => v[optStat] = v.money / 1000 + v.respect); // Hack to support a "optimized total" stat when trying to balance both money and wanted
+        Object.values(memberTaskRates).forEach((tasks, idx) => tasks.sort((a, b) => idx % 2 == 0 ? b.respect - a.respect : b.money - a.money)); // Hack: Even members prioritize respect, odd money
+    } else {
+        Object.values(memberTaskRates).forEach(tasks => tasks.sort((a, b) => b[optStat] - a[optStat]));
+    }
+    //ns.print(memberTaskRates);
 
   // Run "the algorithm"
   const start = Date.now() // Time the algorithms
@@ -397,59 +394,59 @@ async function doRecruitMember (ns) {
 
 /** @param {NS} ns
  * Check if any members are deemed worth ascending to increase a stat multiplier **/
-async function tryAscendMembers (ns) {
-  const dictAscensionResults = await getGangInfoDict(ns, myGangMembers, 'getAscensionResult')
-  for (let i = 0; i < myGangMembers.length; i++) {
-    const member = myGangMembers[i]
-    // First members are given the largest threshold, so that early on when they are our only members, they are more stable
-    const ascMultiThreshold = options['ascend-multi-threshold'] + (11 - i) * options['ascend-multi-threshold-spacing']
-    const ascResult = dictAscensionResults[member]
-    if (!ascResult || !importantStats.some(stat => ascResult[stat] >= ascMultiThreshold)) { continue }
-    if (undefined !== (await getNsDataThroughFile(ns, 'ns.gang.ascendMember(ns.args[0])', '/Temp/gang-ascend-member.txt', [member]))) {
-      log(ns, `SUCCESS: Ascended member ${member} to increase multis by ${importantStats.map(s => `${s} -> ${ascResult[s].toFixed(2)}x`).join(', ')}`, false, 'success')
-      lastMemberReset[member] = Date.now()
-    } else { log(ns, `ERROR: Attempt to ascended member ${member} failed. Go investigate!`, false, 'error') }
-  }
+async function tryAscendMembers(ns) {
+    const dictAscensionResults = await getGangInfoDict(ns, myGangMembers, 'getAscensionResult');
+    for (let i = 0; i < myGangMembers.length; i++) {
+        const member = myGangMembers[i];
+        // First members are given the largest threshold, so that early on when they are our only members, they are more stable
+        const ascMultiThreshold = options['ascend-multi-threshold'] + (11 - i) * options['ascend-multi-threshold-spacing'];
+        const ascResult = dictAscensionResults[member];
+        if (!ascResult || !importantStats.some(stat => ascResult[stat] >= ascMultiThreshold))
+            continue;
+        if (undefined !== (await getNsDataThroughFile(ns, `ns.gang.ascendMember(ns.args[0])`, null, [member]))) {
+            log(ns, `SUCCESS: Ascended member ${member} to increase multis by ${importantStats.map(s => `${s} -> ${ascResult[s].toFixed(2)}x`).join(", ")}`, false, 'success');
+            lastMemberReset[member] = Date.now();
+        }
+        else
+            log(ns, `ERROR: Attempt to ascended member ${member} failed. Go investigate!`, false, 'error');
+    }
 }
 
 /** @param {NS} ns
  * Upgrade any missing equipment / augmentations of members if we have the budget for it **/
-async function tryUpgradeMembers (ns, dictMembers) {
-  // Update equipment costs to take into account discounts
-  const dictEquipmentCosts = await getGangInfoDict(ns, equipments.map(e => e.name), 'getEquipmentCost')
-  equipments.forEach(e => {
-    e.cost = dictEquipmentCosts[e.name]
-    return e.cost
-  })
-  // Upgrade members, spending no more than x% of our money per tick (and respecting the global reseve)
-  const purchaseOrder = []
-  const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')
-  const homeMoney = playerData.money - (options.reserve != null ? options.reserve : Number(ns.read('reserve.txt') || 0))
-  const maxBudget = 0.99 // Note: To avoid rounding issues and micro-spend race-conditions, only allow budgeting up to 99% of money per tick
-  let budget = Math.min(maxBudget, (options['equipment-budget'] || defaultMaxSpendPerTickTransientEquipment)) * homeMoney
-  let augBudget = Math.min(maxBudget, (options['augmentations-budget'] || defaultMaxSpendPerTickPermanentEquipment)) * homeMoney
-  // Hack: Default aug budget is cut by 1/100 in a few situations (TODO: Add more, like when BitnodeMults are such that gang income is severely nerfed)
-  if (!playerData.has4SDataTixApi || playerData.bitNodeN === 8) {
-    budget /= 100
-    augBudget /= 100
-  }
-  // Find out what outstanding equipment can be bought within our budget
-  for (const equip of equipments) {
-    if (augBudget <= 0) break
-    for (const member of Object.values(dictMembers)) { // Get this equip for each member before considering the next most expensive equip
-      if (augBudget <= 0) break
-      // Bit of a hack: Inflate the "cost" of equipment that doesn't contribute to our main stats so that we don't purchase them unless we have ample cash
-      const percievedCost = equip.cost * (Object.keys(equip.stats).some(stat => importantStats.some(i => stat.includes(i))) ? 1 : offStatCostPenalty)
-      if (percievedCost > augBudget) continue
-      if (equip.type !== 'Augmentation' && percievedCost > budget) continue
-      if (!member.upgrades.includes(equip.name) && !member.augmentations.includes(equip.name)) {
-        purchaseOrder.push({ member: member.name, type: equip.type, equipmentName: equip.name, cost: equip.cost })
-        budget -= equip.cost
-        augBudget -= equip.cost
-      }
+async function tryUpgradeMembers(ns, dictMembers) {
+    // Update equipment costs to take into account discounts
+    const dictEquipmentCosts = await getGangInfoDict(ns, equipments.map(e => e.name), 'getEquipmentCost');
+    equipments.forEach(e => e.cost = dictEquipmentCosts[e.name])
+    // Upgrade members, spending no more than x% of our money per tick (and respecting the global reseve)
+    const purchaseOrder = [];
+    const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()');
+    const homeMoney = playerData.money - (options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0));
+    const maxBudget = 0.99; // Note: To avoid rounding issues and micro-spend race-conditions, only allow budgeting up to 99% of money per tick
+    let budget = Math.min(maxBudget, (options['equipment-budget'] || defaultMaxSpendPerTickTransientEquipment)) * homeMoney;
+    let augBudget = Math.min(maxBudget, (options['augmentations-budget'] || defaultMaxSpendPerTickPermanentEquipment)) * homeMoney;
+    // Hack: Default aug budget is cut by 1/100 in a few situations (TODO: Add more, like when BitnodeMults are such that gang income is severely nerfed)
+    if (!ns.stock.has4SDataTIXAPI() || resetInfo.currentNode === 8) {
+        budget /= 100;
+        augBudget /= 100;
     }
-  }
-  await doUpgradePurchases(ns, purchaseOrder)
+    // Find out what outstanding equipment can be bought within our budget
+    for (const equip of equipments) {
+        if (augBudget <= 0) break;
+        for (const member of Object.values(dictMembers)) { // Get this equip for each member before considering the next most expensive equip
+            if (augBudget <= 0) break;
+            // Bit of a hack: Inflate the "cost" of equipment that doesn't contribute to our main stats so that we don't purchase them unless we have ample cash
+            let percievedCost = equip.cost * (Object.keys(equip.stats).some(stat => importantStats.some(i => stat.includes(i))) ? 1 : offStatCostPenalty);
+            if (percievedCost > augBudget) continue;
+            if (equip.type != "Augmentation" && percievedCost > budget) continue;
+            if (!member.upgrades.includes(equip.name) && !member.augmentations.includes(equip.name)) {
+                purchaseOrder.push({ member: member.name, type: equip.type, equipmentName: equip.name, cost: equip.cost });
+                budget -= equip.cost;
+                augBudget -= equip.cost;
+            }
+        }
+    }
+    await doUpgradePurchases(ns, purchaseOrder);
 }
 
 /** @param {NS} ns
@@ -468,51 +465,55 @@ async function doUpgradePurchases (ns, purchaseOrder) {
   }
 }
 
+let sequentialMisfires = 0;
+
 /** @param {NS} ns
  * Helper to wait for the game to update stats (typically 2 seconds per cycle) **/
-async function waitForGameUpdate (ns, oldGangInfo) {
-  if (!myGangMembers.some(member => !assignedTasks[member].includes('Train'))) { return oldGangInfo } // Ganginfo will never change if all members are training, so don't wait for an update
-  const maxWaitTime = 2500
-  const waitInterval = 100
-  const start = Date.now()
-  let latestGangInfo
-  while (Date.now() < start + maxWaitTime) {
-    latestGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()', '/Temp/gang-info.txt')
-    if (JSON.stringify(latestGangInfo) !== JSON.stringify(oldGangInfo)) { return latestGangInfo }
-    await ns.sleep(Math.min(waitInterval, start + maxWaitTime - Date.now()))
-  }
-  log(ns, `WARNING: Max wait time ${maxWaitTime} exceeded while waiting for old gang info to update.\n${JSON.stringify(oldGangInfo)}\n===\n${JSON.stringify(latestGangInfo)}`, false, 'warning')
-  territoryTickDetected = false
-  return latestGangInfo
+async function waitForGameUpdate(ns, oldGangInfo) {
+    if (!myGangMembers.some(member => !assignedTasks[member].includes("Train")))
+        return oldGangInfo; // Ganginfo will never change if all members are training, so don't wait for an update
+    const maxWaitTime = 2500;
+    const waitInterval = 100;
+    const start = Date.now()
+    while (Date.now() < start + maxWaitTime) {
+        var latestGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
+        if (JSON.stringify(latestGangInfo) != JSON.stringify(oldGangInfo)) {
+            sequentialMisfires = 0;
+            return latestGangInfo;
+        }
+        await ns.sleep(Math.min(waitInterval, start + maxWaitTime - Date.now()));
+    }
+    sequentialMisfires++;
+    log(ns, `WARNING: Max wait time ${maxWaitTime} exceeded while waiting for old gang info to update.\n${JSON.stringify(oldGangInfo)}\n===\n${JSON.stringify(latestGangInfo)}`,
+        false, sequentialMisfires < 2 ? null : 'warning'); // Only pop-up an alert if this happens twice in a row (or more)
+    territoryTickDetected = false;
+    return latestGangInfo;
 }
 
 /** @param {NS} ns
  * Checks whether we should be engaging in warfare based on our gang power and that of other gangs. **/
-async function enableOrDisableWarfare (ns, myGangInfo) {
-  warfareFinished = Math.round(myGangInfo.territory * 2 ** 20) / 2 ** 20 /* Handle API imprecision */ >= 1
-  if (warfareFinished && !myGangInfo.territoryWarfareEngaged) return // No need to engage once we hit 100%
-  const otherGangs = await getNsDataThroughFile(ns, 'ns.gang.getOtherGangInformation()', '/Temp/gang-other-gang-info.txt') // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
-  let lowestWinChance = 1; let totalWinChance = 0; let totalActiveGangs = 0
-  let lowestWinChanceGang = ''
-  for (const otherGang in otherGangs) {
-    if (otherGangs[otherGang].territory === 0 || otherGang === myGangFaction) continue // *New* Don't have to worry about battling a gang if it has 0 territory
-    const winChance = myGangInfo.power / (myGangInfo.power + otherGangs[otherGang].power)
-    if (winChance <= lowestWinChance) lowestWinChanceGang = otherGang
-    totalActiveGangs++
-    totalWinChance += winChance
-    lowestWinChance = Math.min(lowestWinChance, winChance)
-  }
-  // Turn on territory warfare only if we have a better than <territoryEngageThreshold>% chance of beating our random opponent
-  const averageWinChance = totalWinChance / totalActiveGangs
-  const shouldEngage = !warfareFinished && territoryEngageThreshold <= averageWinChance
-  if (shouldEngage !== myGangInfo.territoryWarfareEngaged) {
-    log(ns, (warfareFinished ? 'SUCCESS' : 'INFO') + `: Toggling participation in territory warfare to ${shouldEngage}. Our power: ${formatNumberShort(myGangInfo.power)}. ` +
-            (!warfareFinished
-              ? `Lowest win chance is ${(100 * lowestWinChance).toFixed(2)}% with ${lowestWinChanceGang} (power ${formatNumberShort(otherGangs[lowestWinChanceGang]?.power)}). ` +
-                `Average win chance ${(100 * averageWinChance).toFixed(2)}% across ${totalActiveGangs} active gangs.`
-              : 'We have destroyed all other gangs and earned 100% territory'), false, warfareFinished ? 'info' : 'success')
-    await runCommand(ns, 'ns.gang.setTerritoryWarfare(ns.args[0])', '/Temp/gang-set-warfare.js', [shouldEngage])
-  }
+async function enableOrDisableWarfare(ns, myGangInfo) {
+    warfareFinished = Math.round(myGangInfo.territory * 2 ** 20) / 2 ** 20 /* Handle API imprecision */ >= 1;
+    if (warfareFinished && !myGangInfo.territoryWarfareEngaged) return; // No need to engage once we hit 100%
+    const otherGangs = await getNsDataThroughFile(ns, 'ns.gang.getOtherGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
+    let lowestWinChance = 1, totalWinChance = 0, totalActiveGangs = 0;
+    let lowestWinChanceGang = "";
+    for (const otherGang in otherGangs) {
+        if (otherGangs[otherGang].territory == 0 || otherGang == myGangFaction) continue; // *New* Don't have to worry about battling a gang if it has 0 territory
+        const winChance = myGangInfo.power / (myGangInfo.power + otherGangs[otherGang].power)
+        if (winChance <= lowestWinChance) lowestWinChanceGang = otherGang;
+        totalActiveGangs++, totalWinChance += winChance, lowestWinChance = Math.min(lowestWinChance, winChance);
+    }
+    // Turn on territory warfare only if we have a better than <territoryEngageThreshold>% chance of beating our random opponent
+    const averageWinChance = totalWinChance / totalActiveGangs;
+    const shouldEngage = !warfareFinished && territoryEngageThreshold <= averageWinChance;
+    if (shouldEngage != myGangInfo.territoryWarfareEngaged) {
+        log(ns, (warfareFinished ? 'SUCCESS' : 'INFO') + `: Toggling participation in territory warfare to ${shouldEngage}. Our power: ${formatNumberShort(myGangInfo.power)}. ` +
+            (!warfareFinished ? `Lowest win chance is ${(100 * lowestWinChance).toFixed(2)}% with ${lowestWinChanceGang} (power ${formatNumberShort(otherGangs[lowestWinChanceGang]?.power)}). ` +
+                `Average win chance ${(100 * averageWinChance).toFixed(2)}% across ${totalActiveGangs} active gangs.` :
+                'We have destroyed all other gangs and earned 100% territory'), false, warfareFinished ? 'info' : 'success');
+        await runCommand(ns, `ns.gang.setTerritoryWarfare(ns.args[0])`, null, [shouldEngage]);
+    }
 }
 
 // Ram-dodging helper to get gang information for each item in a list

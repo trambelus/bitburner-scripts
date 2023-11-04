@@ -17,24 +17,33 @@ export async function main(ns) {
         const answer = findAnswer(contractInfo)
         let notice = null;
         if (answer != null) {
-            const solvingResult = ns.codingcontract.attempt(answer, contractInfo.contract, contractInfo.hostname, { returnReward: true })
-            if (solvingResult) {
-                const message = `Solved ${contractInfo.contract} on ${contractInfo.hostname} (${contractInfo.type}). Reward: ${solvingResult}`;
-                ns.toast(message, 'success');
-                ns.tprint(message);
-            } else {
-                notice = `ERROR: Wrong answer for ${contractInfo.contract} on ${contractInfo.hostname}: ${JSON.stringify(answer)}`;
+            let solvingResult = false;
+            try {
+                solvingResult = ns.codingcontract.attempt(answer, contractInfo.contract, contractInfo.hostname, { returnReward: true })
+                if (solvingResult) {
+                    const message = `Solved ${contractInfo.contract} on ${contractInfo.hostname} (${contractInfo.type}). Reward: ${solvingResult}`;
+                    ns.toast(message, 'success');
+                    ns.tprint(message);
+                } else {
+                    notice = `ERROR: Wrong answer for contract type "${contractInfo.type}" (${contractInfo.contract} on ${contractInfo.hostname}):` +
+                        `\nIncorrect Answer Given: ${JSON.stringify(answer)}`;
+                }
+            } catch (err) {
+                let errorMessage = typeof err === 'string' ? err : err.message || JSON.stringify(err);
+                if (err?.stack) errorMessage += '\n' + err.stack;
+                notice = `ERROR: Attemt to solve contract raised an error. (Answer Given: ${JSON.stringify(answer)})` +
+                    `\nWhile unlikely, this could happen if the contract vanished before we had a chance to solve it:\n"${errorMessage}"`;
             }
         } else {
-            notice = `WARNING: No solver available for contract type "${contractInfo.type}"\nFull info: ${JSON.stringify(contractInfo)})`;
+            notice = `WARNING: No solver available for contract type "${contractInfo.type}"`;
         }
         if (notice) {
             if (!notified.includes(contractInfo.contract)) {
-                ns.tprint(notice)
+                ns.tprint(notice + `\nContract Info: ${JSON.stringify(contractInfo)}`)
                 ns.toast(notice, 'warning');
                 notified.push(contractInfo.contract)
             }
-            ns.print(notice);
+            ns.print(notice + `\nContract Info: ${JSON.stringify(contractInfo)}`);
         }
         await ns.sleep(10)
     }
@@ -177,6 +186,8 @@ const codingContractTypesMetadata = [{
 {
     name: 'Array Jumping Game II',
     solver: function (data) {
+        if (data[0] == 0)
+            return '0';
         const n = data.length;
         let reach = 0;
         let jumps = 0;
@@ -207,8 +218,8 @@ const codingContractTypesMetadata = [{
             return a[0] - b[0]
         })
         const result = []
-        let  start = intervals[0][0]
-        let  end = intervals[0][1]
+        let start = intervals[0][0]
+        let end = intervals[0][1]
         for (const interval of intervals) {
             if (interval[0] <= end) {
                 end = Math.max(end, interval[1])
@@ -226,7 +237,7 @@ const codingContractTypesMetadata = [{
 {
     name: 'Generate IP Addresses',
     solver: function (data) {
-        const  ret = []
+        const ret = []
         for (let a = 1; a <= 3; ++a) {
             for (let b = 1; b <= 3; ++b) {
                 for (let c = 1; c <= 3; ++c) {
@@ -247,7 +258,7 @@ const codingContractTypesMetadata = [{
                 }
             }
         }
-        return ret
+        return ret.toString(); // Answer expected is the string representation of this array
     },
 },
 {
@@ -291,15 +302,15 @@ const codingContractTypesMetadata = [{
 {
     name: 'Algorithmic Stock Trader IV',
     solver: function (data) {
-        const  k = data[0]
-        const  prices = data[1]
-        const  len = prices.length
+        const k = data[0]
+        const prices = data[1]
+        const len = prices.length
         if (len < 2) {
             return 0
         }
         if (k > len / 2) {
-            let  res = 0
-            for (let  i = 1; i < len; ++i) {
+            let res = 0
+            for (let i = 1; i < len; ++i) {
                 res += Math.max(prices[i] - prices[i - 1], 0)
             }
             return res
@@ -379,26 +390,26 @@ const codingContractTypesMetadata = [{
 {
     name: 'Shortest Path in a Grid',
     solver: function (data) {
-        //slightly adapted and simplified to get rid of MinHeap usage, and construct a valid path from poential candidates   
+        //slightly adapted and simplified to get rid of MinHeap usage, and construct a valid path from potential candidates   
         //MinHeap replaced by simple array acting as queue (breadth first search)  
         const width = data[0].length;
         const height = data.length;
         const dstY = height - 1;
         const dstX = width - 1;
-  
+
         const distance = new Array(height);
         //const prev: [[number, number] | undefined][] = new Array(height);
         const queue = [];
-  
+
         for (let y = 0; y < height; y++) {
             distance[y] = new Array(width).fill(Infinity);
             //prev[y] = new Array(width).fill(undefined) as [undefined];
         }
-  
+
         function validPosition(y, x) {
             return y >= 0 && y < height && x >= 0 && x < width && data[y][x] == 0;
         }
-  
+
         // List in-bounds and passable neighbors
         function* neighbors(y, x) {
             if (validPosition(y - 1, x)) yield [y - 1, x]; // Up
@@ -406,7 +417,7 @@ const codingContractTypesMetadata = [{
             if (validPosition(y, x - 1)) yield [y, x - 1]; // Left
             if (validPosition(y, x + 1)) yield [y, x + 1]; // Right
         }
-  
+
         // Prepare starting point
         distance[0][0] = 0;
 
@@ -435,10 +446,9 @@ const codingContractTypesMetadata = [{
         while (queue.length > 0) {
             const [y, x] = queue.shift()
             for (const [yN, xN] of neighbors(y, x)) {
-                const d = distance[y][x] + 1
-                if (distance[yN][xN] == Infinity){
-                    queue.push([yN, xN]);
-                    distance[yN][xN] = d;
+                if (distance[yN][xN] == Infinity) {
+                    queue.push([yN, xN])
+                    distance[yN][xN] = distance[y][x] + 1
                 }
             }
         }
@@ -446,30 +456,30 @@ const codingContractTypesMetadata = [{
         // No path at all?
         if (distance[dstY][dstX] == Infinity) return "";
 
-        //trace path back to start
+        //trace a path back to start
         let path = ""
         let [yC, xC] = [dstY, dstX]
-        while (xC != 0 || yC != 0){
+        while (xC != 0 || yC != 0) {
             const dist = distance[yC][xC];
             for (const [yF, xF] of neighbors(yC, xC)) {
-                if (distance[yF][xF] == dist - 1){
-                    path = ( xC == xF  ? (yC == yF + 1 ? "D" : "U") : (xC == xF + 1 ? "R" : "L") ) + path;                    
+                if (distance[yF][xF] == dist - 1) {
+                    path = (xC == xF ? (yC == yF + 1 ? "D" : "U") : (xC == xF + 1 ? "R" : "L")) + path;
                     [yC, xC] = [yF, xF]
                     break
                 }
-            }            
+            }
         }
-        
+
         return path;
     }
 },
 {
     name: 'Sanitize Parentheses in Expression',
     solver: function (data) {
-        let  left = 0
-        let  right = 0
+        let left = 0
+        let right = 0
         const res = []
-        for (let  i = 0; i < data.length; ++i) {
+        for (let i = 0; i < data.length; ++i) {
             if (data[i] === '(') {
                 ++left
             } else if (data[i] === ')') {
@@ -544,7 +554,7 @@ const codingContractTypesMetadata = [{
 },
 {
     //Taken from https://github.com/danielyxie/bitburner/blob/dev/src/utils/HammingCodeTools.ts and converted to js by Discord: H3draut3r#6722
-    name: 'HammingCodes: Integer to encoded Binary',
+    name: 'HammingCodes: Integer to Encoded Binary',
     solver: function (value) {
         // Calculates the needed amount of parityBits 'without' the "overall"-Parity
         const HammingSumOfParity = lengthOfDBits => lengthOfDBits == 0 ? 0 : lengthOfDBits < 3 ? lengthOfDBits + 1 :
@@ -660,8 +670,207 @@ const codingContractTypesMetadata = [{
         while (!oddCycleFound && solution.some(e => e === undefined)) {
             traverse(solution.indexOf(undefined), 0)
         }
-        if (oddCycleFound) return []
+        if (oddCycleFound) return "[]"; // TODO: Bug #3755 in bitburner requires a string literal. Will this be fixed?
         return solution
     },
 },
+{
+    name: "Compression I: RLE Compression",
+    solver: function (data) {
+        //original code doesn't generate an answer, but validates it, fallback to this one-liner
+        return data.replace(/([\w])\1{0,8}/g, (group, chr) => group.length + chr)
+    }
+},
+{
+    name: "Compression II: LZ Decompression",
+    solver: function (compr) {
+        let plain = "";
+
+        for (let i = 0; i < compr.length;) {
+            const literal_length = compr.charCodeAt(i) - 0x30;
+
+            if (literal_length < 0 || literal_length > 9 || i + 1 + literal_length > compr.length) {
+                return null;
+            }
+
+            plain += compr.substring(i + 1, i + 1 + literal_length);
+            i += 1 + literal_length;
+
+            if (i >= compr.length) {
+                break;
+            }
+            const backref_length = compr.charCodeAt(i) - 0x30;
+
+            if (backref_length < 0 || backref_length > 9) {
+                return null;
+            } else if (backref_length === 0) {
+                ++i;
+            } else {
+                if (i + 1 >= compr.length) {
+                    return null;
+                }
+
+                const backref_offset = compr.charCodeAt(i + 1) - 0x30;
+                if ((backref_length > 0 && (backref_offset < 1 || backref_offset > 9)) || backref_offset > plain.length) {
+                    return null;
+                }
+
+                for (let j = 0; j < backref_length; ++j) {
+                    plain += plain[plain.length - backref_offset];
+                }
+
+                i += 2;
+            }
+        }
+
+        return plain;
+    }
+},
+{
+    name: "Compression III: LZ Compression",
+    solver: function (plain) {
+        let cur_state = Array.from(Array(10), () => Array(10).fill(null));
+        let new_state = Array.from(Array(10), () => Array(10));
+
+        function set(state, i, j, str) {
+            const current = state[i][j];
+            if (current == null || str.length < current.length) {
+                state[i][j] = str;
+            } else if (str.length === current.length && Math.random() < 0.5) {
+                // if two strings are the same length, pick randomly so that
+                // we generate more possible inputs to Compression II
+                state[i][j] = str;
+            }
+        }
+
+        // initial state is a literal of length 1
+        cur_state[0][1] = "";
+
+        for (let i = 1; i < plain.length; ++i) {
+            for (const row of new_state) {
+                row.fill(null);
+            }
+            const c = plain[i];
+
+            // handle literals
+            for (let length = 1; length <= 9; ++length) {
+                const string = cur_state[0][length];
+                if (string == null) {
+                    continue;
+                }
+
+                if (length < 9) {
+                    // extend current literal
+                    set(new_state, 0, length + 1, string);
+                } else {
+                    // start new literal
+                    set(new_state, 0, 1, string + "9" + plain.substring(i - 9, i) + "0");
+                }
+
+                for (let offset = 1; offset <= Math.min(9, i); ++offset) {
+                    if (plain[i - offset] === c) {
+                        // start new backreference
+                        set(new_state, offset, 1, string + length + plain.substring(i - length, i));
+                    }
+                }
+            }
+
+            // handle backreferences
+            for (let offset = 1; offset <= 9; ++offset) {
+                for (let length = 1; length <= 9; ++length) {
+                    const string = cur_state[offset][length];
+                    if (string == null) {
+                        continue;
+                    }
+
+                    if (plain[i - offset] === c) {
+                        if (length < 9) {
+                            // extend current backreference
+                            set(new_state, offset, length + 1, string);
+                        } else {
+                            // start new backreference
+                            set(new_state, offset, 1, string + "9" + offset + "0");
+                        }
+                    }
+
+                    // start new literal
+                    set(new_state, 0, 1, string + length + offset);
+
+                    // end current backreference and start new backreference
+                    for (let new_offset = 1; new_offset <= Math.min(9, i); ++new_offset) {
+                        if (plain[i - new_offset] === c) {
+                            set(new_state, new_offset, 1, string + length + offset + "0");
+                        }
+                    }
+                }
+            }
+
+            const tmp_state = new_state;
+            new_state = cur_state;
+            cur_state = tmp_state;
+        }
+
+        let result = null;
+
+        for (let len = 1; len <= 9; ++len) {
+            let string = cur_state[0][len];
+            if (string == null) {
+                continue;
+            }
+
+            string += len + plain.substring(plain.length - len, plain.length);
+            if (result == null || string.length < result.length) {
+                result = string;
+            } else if (string.length == result.length && Math.random() < 0.5) {
+                result = string;
+            }
+        }
+
+        for (let offset = 1; offset <= 9; ++offset) {
+            for (let len = 1; len <= 9; ++len) {
+                let string = cur_state[offset][len];
+                if (string == null) {
+                    continue;
+                }
+
+                string += len + "" + offset;
+                if (result == null || string.length < result.length) {
+                    result = string;
+                } else if (string.length == result.length && Math.random() < 0.5) {
+                    result = string;
+                }
+            }
+        }
+
+        return result ?? "";
+    }
+},
+{
+    name: 'Encryption I: Caesar Cipher',
+    solver: function (data) {
+        // data = [plaintext, shift value]
+        // build char array, shifting via map and join to final results
+        const cipher = [...data[0]]
+            .map((a) => (a === " " ? a : String.fromCharCode(((a.charCodeAt(0) - 65 - data[1] + 26) % 26) + 65)))
+            .join("");
+        return cipher;
+    }
+},
+
+{
+    name: "Encryption II: Vigenère Cipher",
+    solver: function (data) {
+        // data = [plaintext, keyword]
+        // build char array, shifting via map and corresponding keyword letter and join to final results
+        const cipher = [...data[0]]
+            .map((a, i) => {
+                return a === " "
+                    ? a
+                    : String.fromCharCode(((a.charCodeAt(0) - 2 * 65 + data[1].charCodeAt(i % data[1].length)) % 26) + 65);
+            })
+            .join("");
+        return cipher;
+    }
+}
+
 ]
