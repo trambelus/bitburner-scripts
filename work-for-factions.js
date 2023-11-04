@@ -2,6 +2,7 @@ import {
   instanceCount, getConfiguration, getNsDataThroughFile, getFilePath, getActiveSourceFiles, tryGetBitNodeMultipliers,
   formatDuration, formatMoney, formatNumberShort, disableLogs, log
 } from './helpers.js'
+import { doGainz } from './gym.js'
 
 let options
 const argsSchema = [
@@ -14,6 +15,7 @@ const argsSchema = [
   ['pay-for-studies-threshold', 200000], // Only be willing to pay for our studies if we have this much money
   ['training-stat-per-multi-threshold', 100], // Heuristic: Estimate that we can train this many levels for every mult / exp_mult we have in a reasonable amount of time.
   ['no-coding-contracts', false], // Disable purchasing coding contracts for reputation
+  ['no-crime-training', true], // Set to true to only commit crimes for karma and kills, not to train combat stats
   ['no-crime', false], // Disable doing crimes at all. (Also disabled with --no-focus)
   ['crime-focus', false], // Useful in crime-focused BNs when you want to focus on crime related factions
   ['fast-crimes-only', false], // Assasination and Heist are so slow, I can see people wanting to disable them just so they can interrupt at will.
@@ -261,7 +263,7 @@ async function mainLoop (ns) {
 
   // Remove Fulcrum from our "EarlyFactionOrder" if hack level is insufficient to backdoor their server
   const priorityFactions = options['crime-focus'] ? preferredCrimeFactionOrder.slice() : preferredEarlyFactionOrder.slice()
-  if (player.hacking < fulcrummHackReq - 10) { // Assume that if we're within 10, we'll get there by the time we've earned the invite
+  if (player.skills.hacking < fulcrummHackReq - 10) { // Assume that if we're within 10, we'll get there by the time we've earned the invite
     priorityFactions.splice(priorityFactions.findIndex(c => c === 'Fulcrum Secret Technologies'), 1)
     ns.print(`Fulcrum faction server requires ${fulcrummHackReq} hack, so removing from our initial priority list for now.`)
   } // TODO: Otherwise, if we get Fulcrum, we have no need for a couple other company factions
@@ -332,9 +334,10 @@ async function mainLoop (ns) {
     ns.print(`INFO: All useful work complete. Grinding an additional 5% rep (to ${formatNumberShort(targetRep)}) with highest-favor faction: ${mostFavorFaction} (${dictFactionFavors[mostFavorFaction]?.toFixed(2)} favor)`)
     foundWork = await workForSingleFaction(ns, mostFavorFaction, false, false, targetRep)
   }
-  if (!foundWork && !options['no-crime']) { // Otherwise, kill some time by doing crimes for a little while
+  if (!foundWork && !options['no-crime'] && !options['no-crime-training']) { // Otherwise, kill some time by doing crimes for a little while
     ns.print('INFO: Nothing to do. Doing a little crime...')
     await crimeForKillsKarmaStats(ns, 0, -ns.heart.break() + 1000 /* Hack: Decrease Karma by 1000 */, 0)
+    if (options['no-crime-training'])
   } else if (!foundWork) { // If our hands our tied, twiddle our thumbs a bit
     ns.print('INFO: Nothing to do. Sleeping for 30 seconds to see if magically we join a faction')
     await ns.sleep(30000)
@@ -406,24 +409,45 @@ async function earnFactionInvite (ns, factionName) {
   // Check on physical stat requirements
   const physicalStats = ['strength', 'defense', 'dexterity', 'agility']
   requirement = requiredCombatByFaction[factionName]
-  const deficientStats = !requirement ? [] : physicalStats.map(stat => ({ stat, value: player[stat] })).filter(stat => stat.value < requirement)
+  const deficientStats = !requirement ? [] : physicalStats.map(stat => ({ stat, value: player.skills[stat] })).filter(stat => stat.value < requirement)
   // Hash for special-case factions (just 'Daedalus' for now) requiring *either* hacking *or* combat
   if (reqHackingOrCombat.includes(factionName) && (
-    requiredHackByFaction[factionName] / Math.sqrt(player.hacking_exp * player.hacking_exp_mult) <
-        requiredCombatByFaction[factionName] / Math.sqrt(player.agility_exp * player.agility_exp_mult))) { ns.print(`Ignoring combat requirement for ${factionName} as we are more likely to unlock them via hacking stats.`) } else if (deficientStats.length > 0) {
+    requiredHackByFaction[factionName] / Math.sqrt(player.exp.hacking * player.mults.hacking_exp) <
+        requiredCombatByFaction[factionName] / Math.sqrt(player.exp.agility * player.mults.agility_exp))) { ns.print(`Ignoring combat requirement for ${factionName} as we are more likely to unlock them via hacking stats.`) } else if (deficientStats.length > 0) {
     ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
-            physicalStats.map(s => `${s.slice(0, 3)}: ${player[s]}`).join(', '))
+            physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(', '))
     const em = requirement / options['training-stat-per-multi-threshold']
     // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time. TODO: Be smarter
-    if (physicalStats.some(s => Math.sqrt(player[`${s}_mult`] * player[`${s}_exp_mult`]) < em)) {
+    if (physicalStats.some(s => Math.sqrt(player.mults[s] * player.mults[`${s}_exp`]) < em)) {
       return ns.print('Some mults + exp_mults appear to be too low to increase stats in a reasonable amount of time. ' +
                 `You can control this with --training-stat-per-multi-threshold. Current mult/exp avg should be ~${formatNumberShort(em, 2)}, have ` +
-                physicalStats.map(s => `${s.slice(0, 3)}: ${formatNumberShort(player[`${s}_mult`], 2)}/${formatNumberShort(player[`${s}_exp_mult`], 2)}`).join(', '))
+                physicalStats.map(s => `${s.slice(0, 3)}: ${formatNumberShort(player.mults[s], 2)}/${formatNumberShort(player.mults[`${s}_exp`], 2)}`).join(', '))
     }
-    doCrime = true // TODO: There could be more efficient ways to gain combat stats than homicide, although at least this serves future crime factions
+    doCrime = true
   }
   if (doCrime && options['no-crime']) { return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`) }
-  if (doCrime) { workedForInvite = await crimeForKillsKarmaStats(ns, requiredKillsByFaction[factionName] || 0, requiredKarmaByFaction[factionName] || 0, requiredCombatByFaction[factionName] || 0) }
+  if (doCrime) {
+    workedForInvite = await crimeForKillsKarmaStats(ns,
+      requiredKillsByFaction[factionName] || 0,
+      requiredKarmaByFaction[factionName] || 0,
+      requiredCombatByFaction[factionName] || 0,
+      options['fast-crimes-only'],
+      options['no-crime-training']
+    )
+    // If no-crime-training is set, check if combat stats are still insufficient
+    if (options['no-crime-training'] && workedForInvite) {
+      player = await getPlayerInfo(ns)
+      if (requiredCombatByFaction[factionName] && (
+        player.skills.strength < requiredCombatByFaction[factionName] ||
+        player.skills.defense < requiredCombatByFaction[factionName] ||
+        player.skills.dexterity < requiredCombatByFaction[factionName] ||
+        player.skills.agility < requiredCombatByFaction[factionName]
+      )) {
+        ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
+                    physicalStats.map(s => `${s.slice(0, 3)}: ${player[s]}`).join(', '))
+      }
+    }
+  }
 
   // Study for hack levels if that's what's keeping us
   // Note: Check if we have insuffient hack to backdoor this faction server. If we have sufficient hack, we will "waitForInvite" below assuming an external script is backdooring ASAP
@@ -522,7 +546,7 @@ async function goToCity (ns, cityName) {
 }
 
 /** @param {NS} ns */
-export async function crimeForKillsKarmaStats (ns, reqKills, reqKarma, reqStats, doFastCrimesOnly = false) {
+export async function crimeForKillsKarmaStats (ns, reqKills, reqKarma, reqStats, doFastCrimesOnly = false, noCombatTraining = false) {
   const bestCrimesByDifficulty = ['heist', 'assassinate', 'homicide', 'mug'] // Will change crimes as our success rate improves
   const chanceThresholds = [0.75, 0.9, 0.5, 0] // Will change crimes once we reach this probability of success for better all-round gains
   doFastCrimesOnly = doFastCrimesOnly || (options ? options['fast-crimes-only'] : false)
@@ -531,13 +555,21 @@ export async function crimeForKillsKarmaStats (ns, reqKills, reqKarma, reqStats,
   const forever = reqKills >= Number.MAX_SAFE_INTEGER || reqKarma >= Number.MAX_SAFE_INTEGER || reqStats >= Number.MAX_SAFE_INTEGER
   if (reqKills) strRequirements.push(() => `${reqKills} kills (Have ${player.numPeopleKilled})`)
   if (reqKarma) strRequirements.push(() => `-${reqKarma} Karma (Have ${ns.heart.break()})`)
-  if (reqStats) strRequirements.push(() => `${reqStats} of each combat stat (Have Str: ${player.strength}, Def: ${player.defense}, Dex: ${player.dexterity}, Agi: ${player.agility})`)
+  if (reqStats) strRequirements.push(() => `${reqStats} of each combat stat (Have Str: ${player.skills.strength}, Def: ${player.skills.defense}, Dex: ${player.skills.dexterity}, Agi: ${player.skills.agility})`)
   let crime, lastCrime, lastStatusUpdateTime
   /* eslint-disable-next-line no-unmodified-loop-condition */
-  while (forever || player.strength < reqStats || player.defense < reqStats || player.dexterity < reqStats || player.agility < reqStats || player.numPeopleKilled < reqKills || -ns.heart.break() < reqKarma) {
+  while (forever || 
+    (!noCombatTraining && (player.skills.strength < reqStats || player.skills.defense < reqStats || player.skills.dexterity < reqStats || player.skills.agility < reqStats)) ||
+    player.numPeopleKilled < reqKills || -ns.heart.break() < reqKarma) {
+
     if (!forever && breakToMainLoop()) return ns.print('INFO: Interrupting crime to check on high-level priorities.')
     const crimeChances = await getNsDataThroughFile(ns, 'Object.fromEntries(ns.args.map(c => [c, ns.getCrimeChance(c)]))', '/Temp/crime-chances.txt', bestCrimesByDifficulty)
-    const needStats = player.strength < reqStats || player.defense < reqStats || player.dexterity < reqStats || player.agility < reqStats
+    const needStats = !noCombatTraining && (
+      player.skills.strength < reqStats ||
+      player.skills.defense < reqStats ||
+      player.skills.dexterity < reqStats ||
+      player.skills.agility < reqStats
+    )
     const karma = -ns.heart.break()
     crime = crimeCount < 10
       ? (crimeChances.homicide > 0.75 ? 'homicide' : 'mug') // Start with a few fast & easy crimes to boost stats if we're just starting
