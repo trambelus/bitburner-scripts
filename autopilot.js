@@ -28,6 +28,7 @@ const argsSchema = [ // The set of all command line arguments
     ['disable-wait-for-4s', false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
     ['disable-rush-gangs', false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
     ['disable-casino', false], // Set to true to disable running the casino.js script automatically
+    ['no-crime', false], // Set to true to pass --no-crime to work-for-factions.js
     ['on-completion-script', null], // Spawn this script when we defeat the bitnode
     ['on-completion-script-args', []], // Optional args to pass to the script when we defeat the bitnode
 ];
@@ -372,6 +373,11 @@ async function checkOnRunningScripts(ns, player) {
     if ((4 in unlockedSFs) && unlockedSFs[4] < 3)
         daemonArgs.push('--reserved-ram', 32 * (unlockedSFs[4] == 2 ? 4 : 16));
 
+    if (resetInfo.currentNode === 9)
+      // Use half of our hacknet servers for hacking, the other half for hash generation (can adjust this later)
+      // It's more important in bitnode 9 because RAM is severely limited
+      daemonArgs.push('--hacknet-server-usage', '0.5');
+
     // Once stanek's gift is accepted, launch it once per reset (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)
     let stanekRunning = (13 in unlockedSFs) && findScript('stanek.js') !== undefined;
     if ((13 in unlockedSFs) && installedAugmentations.includes(`Stanek's Gift - Genesis`) && !stanekLaunched && !stanekRunning) {
@@ -396,6 +402,9 @@ async function checkOnRunningScripts(ns, player) {
         "--fast-crimes-only", // Essentially means we do mug until we can do homicide, then stick to homicide
         "--get-invited-to-every-faction" // Join factions even we have all their augs. Good for having NeuroFlux providers
     ];
+  
+    if (options['no-crime']) workForFactionsArgs[0] = "--no-crime";
+
     if (options['disable-bladeburner']) workForFactionsArgs.push("--no-bladeburner-check")
     // The following args are ideal when running 'work-for-factions.js' to rush unlocking gangs (earn karma)
     const rushGangsArgs = workForFactionsArgs.concat(...[ // Everything above, plus...

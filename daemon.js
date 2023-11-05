@@ -31,9 +31,8 @@ const argsSchema = [
     ['run-once', false], // Same as above
     ['x', false], // Focus on a strategy that produces the most hack EXP rather than money
     ['xp-only', false], // Same as above
-    ['n', false], // Can toggle on using hacknet nodes for extra hacking ram (at the expense of hash production)
-    ['use-hacknet-nodes', false], // Same as above (kept for backwards compatibility, but these are now called hacknet-servers)
-    ['use-hacknet-servers', false], // Same as above, but the game recently renamed these
+    ['n', 0], // Percentage of hacknet nodes to use for hacking (default 0%, to keep hash production high)
+    ['hacknet-server-usage', 0], // Same as above, but the game recently renamed these
     ['spend-hashes-for-money-when-under', 10E6], // (Default 10m) Convert 4 hashes to money whenever we're below this amount
     ['disable-spend-hashes', false], // An easy way to set the above to a very large negative number, thus never spending hashes for Money
     ['silent-misfires', false], // Instruct remote scripts not to alert when they misfire
@@ -118,7 +117,7 @@ let stockFocus = false;  // If true, stocks are main source of income - kill any
 let xpOnly = false; // "-x" command line arg - focus on a strategy that produces the most hack EXP rather than money
 let verbose = false; // "-v" command line arg - Detailed logs about batch scheduling / tuning
 let runOnce = false; // "-o" command line arg - Good for debugging, run the main targettomg loop once then stop
-let useHacknetNodes = false; // "-n" command line arg - Can toggle using hacknet nodes for extra hacking ram
+let hacknetServerUsage = 0; // "-n" command line arg - Can toggle using hacknet nodes for extra hacking ram
 let loopingMode = false;
 let recoveryThreadPadding = 1; // How many multiples to increase the weaken/grow threads to recovery from misfires automatically (useful when RAM is abundant and timings are tight)
 
@@ -250,7 +249,7 @@ export async function main(ns) {
     xpOnly = options.x || options['xp-only'];
     stockMode = (options.s || options['stock-manipulation'] || options['stock-manipulation-focus']) && !options['disable-stock-manipulation'];
     stockFocus = options['stock-manipulation-focus'] && !options['disable-stock-manipulation'];
-    useHacknetNodes = options.n || options['use-hacknet-nodes'] || options['use-hacknet-servers'];
+    hacknetServerUsage = options.n || options['hacknet-server-usage'];
     verbose = options.v || options['verbose'];
     runOnce = options.o || options['run-once'];
     loopingMode = options['looping-mode'];
@@ -258,7 +257,7 @@ export async function main(ns) {
     // Log which flaggs are active
     if (hackOnly) log(ns, '-h - Hack-Only mode activated!');
     if (xpOnly) log(ns, '-x - Hack XP Grinding mode activated!');
-    if (useHacknetNodes) log(ns, '-n - Using hacknet nodes to run scripts!');
+    if (hacknetServerUsage) log(ns, `-n - Using hacknet nodes to run scripts! Percentage: ${Math.floor(hacknetServerUsage * 100)}%`);
     if (verbose) log(ns, '-v - Verbose logging activated!');
     if (runOnce) log(ns, '-o - Run-once mode activated!');
     if (stockMode) log(ns, 'Stock market manipulation mode is active (now enabled by default)');
@@ -1770,8 +1769,19 @@ async function buildServerList(ns, verbose = false, allServers = undefined) {
     allServers ??= await getNsDataThroughFile(ns, 'scanAllServers(ns)');
     let scanResult = allServers;
     // Ignore hacknet node servers if we are not supposed to run scripts on them (reduces their hash rate when we do)
-    if (!useHacknetNodes)
+    if (hacknetServerUsage === 0)
         scanResult = scanResult.filter(hostName => !hostName.startsWith('hacknet-server-') && !hostName.startsWith('hacknet-node-'))
+    // If 0 < hacknetServerUsage < 1, remove a fraction of hacknet servers from the list.
+    // For now this will assume all hacknet servers have the same RAM, which should be generally true if hacknet-upgrade-manager.js isn't changed.
+    else if (hacknetServerUsage < 1) {
+        const hacknetServers = scanResult.filter(hostName => hostName.startsWith('hacknet-server-'));
+        const numHacknetServersToRemove = hacknetServers.length - Math.floor(hacknetServers.length * hacknetServerUsage);
+        if (numHacknetServersToRemove > 0) {
+            const hacknetServersToRemove = hacknetServers.slice(0, numHacknetServersToRemove);
+            scanResult = scanResult.filter(hostName => !hacknetServersToRemove.includes(hostName));
+            // if (verbose) log(ns, `Removed ${numHacknetServersToRemove} hacknet servers from the list of servers to run scripts on.`);
+        }
+    }
     // Remove all servers we currently have added that are no longer being returned by the above query
     for (const hostName of allHostNames.filter(hostName => !scanResult.includes(hostName)))
         removeServerByName(ns, hostName);
