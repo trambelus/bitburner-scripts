@@ -26,7 +26,7 @@ const serviceName = 'infiltrator'
 const WKSharmonizerMult = 1.5
 
 const _win = [].map.constructor('return this')()
-const _doc = _win.document
+const _doc = [].map.constructor('return this.document')()
 
 const argsSchema = [
   ['stop', false], // set to stop the old service and not start a new one
@@ -148,9 +148,6 @@ function pressKey (key) {
 /**
  * Wrap all event listeners with a custom function that injects
  * the "isTrusted" flag.
- *
- * Is this cheating? Or is it real hacking? Don't care, as long
- * as it's working :)
  */
 export function wrapEventListeners () {
   if (!_doc._addEventListener) {
@@ -388,16 +385,21 @@ class InfiltrationService {
     const sizeX = ~~(gridElements.length ** 0.5)
     const sizeY = gridElements.length / sizeX // grid may have an extra row, so account for that
     if (sizeY !== ~~sizeY) {
-      logConsole('WARNING: non-rectangular grid???')
+      logConsole('ERROR: non-rectangular grid???')
       return
     }
+    const mineCoords = []
     // get coordinates for each mine
-    const mineCoords = gridElements.filter(el => el.firstChild?.getAttribute('data-testid') === 'ReportIcon').map(el => {
-      el.style.borderColor = 'red' // turn the border red for no real reason, while we're here
-      return [getNodeIndex(el) % sizeX, ~~(getNodeIndex(el) / sizeX)]
+    gridElements.map(el => {
+      if (el.firstChild?.getAttribute('data-testid') === 'ReportIcon') {
+        mineCoords.push([getNodeIndex(el) % sizeX, ~~(getNodeIndex(el) / sizeX)])
+      }
     })
     // trace code to print the known coords
     console.log('Mine coords: ' + JSON.stringify(mineCoords))
+    // print the number of mines
+    console.log(`Mines: ${mineCoords.length}`)
+    // print the solution string
     for (let y = 0; y < sizeY; y++) {
       const row = []
       for (let x = 0; x < sizeX; x++) {
@@ -409,6 +411,8 @@ class InfiltrationService {
     while (queryFilter('h4', memoryPhaseText)) {
       await sleep(50)
     }
+    // wait just a bit longer, to make sure the grid is updated
+    await sleep(50)
     // send solution string
     const pathStr = getPathSequential(sizeX, sizeY, mineCoords).join(' ') + ' '
     logConsole(`Mine solution string: ${pathStr}`)
@@ -422,11 +426,11 @@ class InfiltrationService {
   async slash () {
     const self = this
     if (!self.automationEnabled) return
-    const activeText = 'Slash when his guard is down!'
+    const activeText = 'Attack when his guard is down!'
     let activeElement = queryFilter('h4', activeText)
     while (activeElement !== undefined) {
       logConsole('Game active: Slash game')
-      if (queryFilter('h4', 'ATTACKING!')) {
+      if (queryFilter('h4', 'Preparing?')) {
         await sleep(1)
         await self.sendKeyString(' ')
       }
@@ -522,7 +526,7 @@ class InfiltrationService {
       'patient',
       'dynamic',
       'loyal',
-      'based'
+      'straightforward'
     ]
     while (activeElement !== undefined) {
       logConsole('Game active: Bribe game')
@@ -530,8 +534,10 @@ class InfiltrationService {
       const upArrowIsBest = globalThis.getComputedStyle(activeElement.nextSibling).color === globalThis.getComputedStyle(activeElement).color
       const currentWord = activeElement.nextSibling.nextSibling.innerText
       if (positive.includes(currentWord)) {
+        console.log(`!!! ${currentWord} !!!`)
         await self.sendKeyString(' ')
       } else if (lastWord !== currentWord) {
+        console.log(currentWord)
         await self.sendKeyString(upArrowIsBest ? 'w' : 's')
         lastWord = currentWord
       }
@@ -547,6 +553,9 @@ class InfiltrationService {
     const activeElement = queryFilter('h4', activeText)
     if (activeElement === undefined) return
     logConsole('Game active: Wire Cutting game')
+
+    // sleep for a bit, since hint extraction sometimes fails
+    await sleep(100)
 
     // extract hints
     const hints = [...activeElement.parentNode.querySelectorAll('p')].map(el => el.innerText).join('')
@@ -772,12 +781,12 @@ export function calculateSkill (exp, mult = 1) {
 function calcReward (player, startingDifficulty) {
   const xpMult = 10 * 60 * 15
   const stats =
-    calculateSkill((player?.strength_exp_mult ?? 1) * xpMult, (player?.strength_mult ?? 1)) +
-    calculateSkill((player?.defense_exp_mult ?? 1) * xpMult, (player?.defense_mult ?? 1)) +
-    calculateSkill((player?.agility_exp_mult ?? 1) * xpMult, (player?.agility_mult ?? 1)) +
-    calculateSkill((player?.dexterity_exp_mult ?? 1) * xpMult, (player?.dexterity_mult ?? 1)) +
-    calculateSkill((player?.charisma_exp_mult ?? 1) * xpMult, (player?.charisma_mult ?? 1))
-  let difficulty = startingDifficulty - Math.pow(stats, 0.9) / 250 - player.intelligence / 1600
+    calculateSkill((player?.mults.strength_exp ?? 1) * xpMult, (player?.mults.strength ?? 1)) +
+    calculateSkill((player?.mults.defense_exp ?? 1) * xpMult, (player?.mults.defense ?? 1)) +
+    calculateSkill((player?.mults.agility_exp ?? 1) * xpMult, (player?.mults.agility ?? 1)) +
+    calculateSkill((player?.mults.dexterity_exp ?? 1) * xpMult, (player?.mults.dexterity ?? 1)) +
+    calculateSkill((player?.mults.charisma_exp ?? 1) * xpMult, (player?.mults.charisma ?? 1))
+  let difficulty = startingDifficulty - Math.pow(stats, 0.9) / 250 - (player.intelligence ?? 0) / 1600
   if (difficulty < 0) difficulty = 0
   if (difficulty > 3) difficulty = 3
   return difficulty
@@ -822,7 +831,7 @@ function getAllRewards (ns, bnMults, player, wks = false, display = false) {
 
 async function hasSoaAug (ns) {
   try {
-    const augs = await getNsDataThroughFile(ns, 'ns.getOwnedAugmentations()', '/Temp/player-augs-installed.txt')
+    const augs = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations()', '/Temp/player-augs-installed.txt')
     return augs.some(aug => aug.toLowerCase().includes('wks harmonizer'))
   } catch (err) {
     log(ns, `WARN: Could not get list of owned augs: ${err.toString()}`)
@@ -886,7 +895,7 @@ export async function main (ns) {
     return
   }
   // get BN multipliers first to feed reward info to infiltration service
-  const bnMults = await tryGetBitNodeMultipliers(ns)
+  const bnMults = await tryGetBitNodeMultipliers(ns) ?? { InfiltrationRep: 1, InfiltrationMoney: 1 }
   const player = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')
   const wks = await hasSoaAug(ns)
   log(ns, `Time factor: ${infiltrationTimeFactor}`, true)
