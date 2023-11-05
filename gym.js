@@ -5,10 +5,10 @@ let _ns
 const doc = [].map.constructor('return this.document')()
 
 const argsSchema = [
-  ['str', 0], // strength score target
-  ['def', 0], // defense score target
-  ['dex', 0], // dexterity score target
-  ['agi', 0], // agility score target
+  ['strength', 0], // strength score target
+  ['defense', 0], // defense score target
+  ['dexterity', 0], // dexterity score target
+  ['agility', 0], // agility score target
   ['stats', 0], // shorthand to override all of the above if higher than them
   ['period', '10s'], // time spent on each before cycling to the next
   ['gym', 'Powerhouse Gym'] // gym to train at. not sure why you would ever change this.
@@ -53,7 +53,7 @@ async function startGymTraining (stat, gym) {
 
 async function ensureCity (player, targetCity) {
   if (player.city !== targetCity) {
-    if (player.money < 200000 || !(await getNsDataThroughFile(_ns, 'ns.travelToCity(ns.args[0])', '/Temp/travel-to-city.txt', [targetCity]))) {
+    if (player.money < 200000 || !(await getNsDataThroughFile(_ns, 'ns.singularity.travelToCity(ns.args[0])', '/Temp/travel-to-city.txt', [targetCity]))) {
       return false
     }
     await _ns.asleep(1000)
@@ -61,7 +61,7 @@ async function ensureCity (player, targetCity) {
   return true
 }
 
-export async function doGainz (strTarget, defTarget, dexTarget, agiTarget, period, gym) {
+export async function doGainz (strTarget, defTarget, dexTarget, agiTarget, period = 10e3, gym = 'Powerhouse Gym') {
   // Validate gym
   if (!(gym in gymLocations)) {
     log(_ns, `ERROR: unknown gym '${gym}'`)
@@ -102,7 +102,7 @@ export async function doGainz (strTarget, defTarget, dexTarget, agiTarget, perio
       log(_ns, `Current target stats: ${Object.keys(targetStats).join(', ')}`)
       for (const stat in targetStats) {
         if (cancel) break
-        if (targetStats[stat] < player[stat]) {
+        if (targetStats[stat] < player.skills[stat]) {
           log(_ns, `Target reached for ${stat}!`)
           delete targetStats[stat]
           continue
@@ -112,6 +112,7 @@ export async function doGainz (strTarget, defTarget, dexTarget, agiTarget, perio
           return
         }
         player = await getNsDataThroughFile(_ns, 'ns.getPlayer()', '/Temp/player-info.txt')
+        // player = _ns.getPlayer() // accuracy matters more than ram minimization here, so we'll just use the native function
         log(_ns, `Training ${stat}, target ${targetStats[stat]}`)
         const result = await startGymTraining(stat, gym)
         if (result === false) {
@@ -137,9 +138,9 @@ export async function main (ns) {
   _ns.disableLog('ALL')
   const options = ns.flags(argsSchema)
   const period = parseTime(options.period)
-  if (options.stats > options.str) options.str = options.stats
-  if (options.stats > options.def) options.def = options.stats
-  if (options.stats > options.dex) options.dex = options.stats
-  if (options.stats > options.agi) options.agi = options.stats
-  await doGainz(options.str, options.def, options.dex, options.agi, period, options.gym)
+  if (options.stats > options.strength) options.strength = options.stats
+  if (options.stats > options.defense) options.defense = options.stats
+  if (options.stats > options.dexterity) options.dexterity = options.stats
+  if (options.stats > options.agility) options.agility = options.stats
+  await doGainz(options.strength, options.defense, options.dexterity, options.agility, period, options.gym)
 }
