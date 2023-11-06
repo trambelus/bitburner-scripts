@@ -294,6 +294,8 @@ export async function main(ns) {
             name: "bladeburner.js", tail: openTailWindows,
             shouldRun: () => !options['disable-script'].includes('bladeburner.js') && 7 in dictSourceFiles && !isInBn8
         },
+        // Zero-RAM service script to handle infiltrations. Run automatically if not disabled.
+        {   name: "infiltrator.js", tail: false, shouldRun: () => !options['disable-script'].includes('infiltrator.js') },
     ];
     asynchronousHelpers.forEach(helper => helper.name = getFilePath(helper.name));
     // Add any additional scripts to be run provided by --run-script arguments
