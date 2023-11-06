@@ -2,7 +2,7 @@ import {
   instanceCount, getConfiguration, getNsDataThroughFile, getFilePath, getActiveSourceFiles, tryGetBitNodeMultipliers,
   formatDuration, formatMoney, formatNumberShort, disableLogs, log
 } from './helpers.js'
-import { doGainz } from './gym.js'
+import GymHandler from './gym.js'
 
 let options
 const argsSchema = [
@@ -11,7 +11,8 @@ const argsSchema = [
   ['o', false], // Immediately grind company factions for rep after getting their invite, rather than first getting all company invites we can
   ['desired-stats', []], // Factions will be removed from our 'early-faction-order' once all augs with these stats have been bought out
   ['no-focus', false], // Disable doing work that requires focusing (crime), and forces study/faction/company work to be non-focused (even if it means incurring a penalty)
-  ['no-studying', false], // Disable studying.
+  ['no-studying', false], // Disable university studying.
+  ['no-gym', false], // Disable gym training.
   ['pay-for-studies-threshold', 200000], // Only be willing to pay for our studies if we have this much money
   ['training-stat-per-multi-threshold', 100], // Heuristic: Estimate that we can train this many levels for every mult / exp_mult we have in a reasonable amount of time.
   ['no-coding-contracts', false], // Disable purchasing coding contracts for reputation
@@ -442,7 +443,23 @@ async function earnFactionInvite (ns, factionName) {
                     `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
                     `${formatNumberShort(bitnodeMultipliers[`${title(s)}LevelMultiplier`])}*` +
                     `${formatNumberShort(bitnodeMultipliers.CrimeExpGain)})=${formatNumberShort(crimeHeuristic(s))}`).join(", "));
-        doCrime = true; // TODO: There could be more efficient ways to gain combat stats than homicide, although at least this serves future crime factions
+        // If gym training is disabled, just do crime to train up physical stats
+        if (options['no-gym']) {
+          ns.print(`--no-gym is set, so physical stats will be trained via crime.`)
+          doCrime = true;
+        } else {
+          // Otherwise, train up physical stats in the gym, assuming we have sufficient money to do so
+          if (player.money > options['pay-for-studies-threshold']) {
+            const gymHandler = new GymHandler(ns, requirement);
+            ns.print(`Training at ${gymHandler.gym} to meet requirements...`)
+            await gymHandler.train()
+          } else {
+            ns.print(`${reasonPrefix} you have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+                `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for gym training. Resorting to a life of crime...`);
+            // TODO: local/cheaper gym training if Powerhouse is out of reach?
+            doCrime = true;
+          }
+        }
     }
     if (doCrime && options['no-crime'])
         return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);

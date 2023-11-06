@@ -29,6 +29,7 @@ const argsSchema = [ // The set of all command line arguments
     ['disable-rush-gangs', false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
     ['disable-casino', false], // Set to true to disable running the casino.js script automatically
     ['no-crime', false], // Set to true to pass --no-crime to work-for-factions.js
+    ['no-gym', false], // Set to true to pass --no-gym to work-for-factions.js
     ['on-completion-script', null], // Spawn this script when we defeat the bitnode
     ['on-completion-script-args', []], // Optional args to pass to the script when we defeat the bitnode
 ];
@@ -403,7 +404,8 @@ async function checkOnRunningScripts(ns, player) {
         "--get-invited-to-every-faction" // Join factions even we have all their augs. Good for having NeuroFlux providers
     ];
   
-    if (options['no-crime']) workForFactionsArgs[0] = "--no-crime";
+    if (options['no-crime']) workForFactionsArgs[0] = "--no-crime"; // Replace the first arg, because it would conflict with --no-crime
+    if (options['no-gym']) workForFactionsArgs.push("--no-gym");
 
     if (options['disable-bladeburner']) workForFactionsArgs.push("--no-bladeburner-check")
     // The following args are ideal when running 'work-for-factions.js' to rush unlocking gangs (earn karma)

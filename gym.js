@@ -1,7 +1,6 @@
 // gym.js
 import { log, getNsDataThroughFile } from './helpers'
 
-let _ns
 const doc = [].map.constructor('return this.document')()
 
 const argsSchema = [
@@ -47,100 +46,114 @@ export function queryFilter (query, filter) {
   return [...doc.querySelectorAll(query)].find(e => e.innerText.trim().match(filter))
 }
 
-async function startGymTraining (stat, gym) {
-  return await getNsDataThroughFile(_ns, 'ns.singularity.gymWorkout(ns.args[0], ns.args[1], ns.args[2])', '/Temp/gym-workout.txt', [gym, stat, false])
-}
+export default class GymHandler {
+  constructor (ns, target, period = 10e3, gym = 'Powerhouse Gym', verbose = false) {
+    ns.disableLog('ALL')
+    this.ns = ns
+    this.target = target
+    this.period = period
+    this.gym = gym
+    this.verbose = verbose
+  }
 
-async function ensureCity (player, targetCity) {
-  if (player.city !== targetCity) {
-    if (player.money < 200000 || !(await getNsDataThroughFile(_ns, 'ns.singularity.travelToCity(ns.args[0])', '/Temp/travel-to-city.txt', [targetCity]))) {
-      return false
+  async startGymTraining (stat, gym) {
+    return await getNsDataThroughFile(this.ns, 'ns.singularity.gymWorkout(ns.args[0], ns.args[1], ns.args[2])', '/Temp/gym-workout.txt', [gym, stat, false])
+  }
+
+  async ensureCity (targetCity) {
+    if (this.player.city !== targetCity) {
+      if (this.player.money < 200000 || !(await getNsDataThroughFile(this.ns, 'ns.singularity.travelToCity(ns.args[0])', '/Temp/travel-to-city.txt', [targetCity]))) {
+        return false
+      }
+      await this.ns.asleep(1000)
     }
-    await _ns.asleep(1000)
-  }
-  return true
-}
-
-export async function doGainz (strTarget, defTarget, dexTarget, agiTarget, period = 10e3, gym = 'Powerhouse Gym') {
-  // Validate gym
-  if (!(gym in gymLocations)) {
-    log(_ns, `ERROR: unknown gym '${gym}'`)
-    return
-  }
-  const targetCity = gymLocations[gym]
-
-  let player = await getNsDataThroughFile(_ns, 'ns.getPlayer()', '/Temp/player-info.txt')
-
-  const targetStats = {
-    strength: strTarget,
-    defense: defTarget,
-    dexterity: dexTarget,
-    agility: agiTarget
+    return true
   }
 
-  // Allow the user to stop this script by clicking the "Stop training" button in the UI
-  let cancel = false
-  const cancelHook = function () {
-    const btn = queryFilter('button', 'Stop training at gym')
-    if (!btn) return
-    const fn = btn.onclick
-    if (fn._hooked) return
-    btn.onclick = () => {
-      log(_ns, 'Stopping training...')
-      cancel = true
-      fn()
+  async train (strTarget = this.target, defTarget = this.target, dexTarget = this.target, agiTarget = this.target, period = this.period, gym = this.gym) {
+    // Get player info
+    this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
+    // Validate gym
+    if (!(gym in gymLocations)) {
+      log(this.ns, `ERROR: unknown gym '${gym}'`)
+      return
     }
-    btn.onclick._hooked = true
-    log(_ns, 'Hooked cancel button.')
-  }
-
-  const interval = setInterval(cancelHook, 100)
-
-  try {
-    /* eslint-disable-next-line no-unmodified-loop-condition */
-    while (!cancel) {
-      log(_ns, `Current target stats: ${Object.keys(targetStats).join(', ')}`)
-      for (const stat in targetStats) {
-        if (cancel) break
-        if (targetStats[stat] < player.skills[stat]) {
-          log(_ns, `Target reached for ${stat}!`)
-          delete targetStats[stat]
-          continue
+    const targetCity = gymLocations[gym]
+  
+    const targetStats = {
+      strength: strTarget,
+      defense: defTarget,
+      dexterity: dexTarget,
+      agility: agiTarget
+    }
+  
+    // Allow the user to stop this script by clicking the "Stop training" button in the UI
+    let cancel = false
+    const cancelHook = function () {
+      const btn = queryFilter('button', 'Stop training at gym')
+      if (!btn) return
+      const fn = btn.onclick
+      if (fn._hooked) return
+      btn.onclick = () => {
+        log(this.ns, 'Stopping training...')
+        cancel = true
+        fn()
+      }
+      btn.onclick._hooked = true
+      log(this.ns, 'Hooked cancel button.')
+    }
+  
+    const interval = setInterval(cancelHook, 100)
+  
+    try {
+      /* eslint-disable-next-line no-unmodified-loop-condition */
+      while (!cancel) {
+        if (this.verbose) log(this.ns, `Current target stats: ${Object.keys(targetStats).join(', ')}`)
+        for (const stat in targetStats) {
+          // Break if there's any reason to stop
+          if (cancel) break
+          if (targetStats[stat] < this.player.skills[stat]) {
+            log(this.ns, `Target reached for ${stat}!`)
+            delete targetStats[stat]
+            continue
+          }
+          if (!(await this.ensureCity(targetCity))) {
+            log(`ERROR: could not travel to ${targetCity}. Exiting...`)
+            return
+          }
+          // Update player info
+          this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
+          // Start training
+          if (this.verbose) log(this.ns, `Training ${stat}, target ${targetStats[stat]}`)
+          const result = await this.startGymTraining(stat, gym)
+          if (result === false) {
+            log(this.ns, 'WARN: gym training failed, probably due to unexpected traveling')
+            continue
+          }
+          await this.ns.asleep(period)
         }
-        if (!(await ensureCity(player, targetCity))) {
-          log(`ERROR: could not travel to ${targetCity}. Exiting...`)
+        if (Object.keys(targetStats).length === 0) {
+          log(this.ns, 'All stat targets have been reached. Exiting...')
           return
         }
-        player = await getNsDataThroughFile(_ns, 'ns.getPlayer()', '/Temp/player-info.txt')
-        // player = _ns.getPlayer() // accuracy matters more than ram minimization here, so we'll just use the native function
-        log(_ns, `Training ${stat}, target ${targetStats[stat]}`)
-        const result = await startGymTraining(stat, gym)
-        if (result === false) {
-          log(_ns, 'WARN: gym training failed, probably due to unexpected traveling')
-          continue
-        }
-        await _ns.asleep(period)
+        await this.ns.asleep(0)
       }
-      if (Object.keys(targetStats).length === 0) {
-        log(_ns, 'All stat targets have been reached. Exiting...')
-        return
-      }
-      await _ns.asleep(0)
+    } finally {
+      clearInterval(interval)
     }
-  } finally {
-    clearInterval(interval)
   }
+  
 }
 
 /** @param {NS} ns */
 export async function main (ns) {
-  _ns = ns
-  _ns.disableLog('ALL')
+  ns.disableLog('ALL')
   const options = ns.flags(argsSchema)
   const period = parseTime(options.period)
   if (options.stats > options.strength) options.strength = options.stats
   if (options.stats > options.defense) options.defense = options.stats
   if (options.stats > options.dexterity) options.dexterity = options.stats
   if (options.stats > options.agility) options.agility = options.stats
-  await doGainz(options.strength, options.defense, options.dexterity, options.agility, period, options.gym)
+  const handler = new GymHandler(ns, options.stats, period, options.gym)
+  await handler.train(options.strength, options.defense, options.dexterity, options.agility, period, options.gym)
 }
