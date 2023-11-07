@@ -32,6 +32,7 @@ class ServerIterator {
 
 function checkWild (pattern, str) {
   return new RegExp('^' + pattern.replace('*', '.*') + '$').test(str)
+  // TODO: support actual regexes instead of just wildcard globbing?
 }
 
 export function kill (ns, targetScript, targetServer) {
@@ -52,13 +53,22 @@ export function kill (ns, targetScript, targetServer) {
   }
 }
 
+export async function autocomplete (data) {
+  // autocomplete for script names (TODO: server names too?)
+  return data.scripts
+}
+
 export async function main (ns) {
   ns.disableLog('ALL')
   if (ns.args.length === 0 || ns.args[0] === '-h') {
-    ns.tprint('Usage: run tkill.ns [scriptNames] [servers]')
+    ns.tprint(`Usage: run ${thisScript} [scriptNames] [servers]`)
     return
   }
-  const targetScript = ns.args[0]
+  let targetScript = ns.args[0]
+  // Add '.js' if there isn't already an extension
+  if (!targetScript.includes('.')) {
+    targetScript += '.js'
+  }
   // default to just nuking scripts everywhere
   const targetServer = ns.args[1] || '*'
   kill(ns, targetScript, targetServer)
