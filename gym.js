@@ -1,6 +1,7 @@
 // gym.js
 import { log, getNsDataThroughFile } from './helpers'
 
+const win = [].map.constructor('return this')()
 const doc = [].map.constructor('return this.document')()
 
 const argsSchema = [
@@ -46,6 +47,17 @@ export function queryFilter (query, filter) {
   return [...doc.querySelectorAll(query)].find(e => e.innerText.trim().match(filter))
 }
 
+async function safeSleep (ms) {
+  // sleep function that's not affected by time shenanigans (e.g. infiltrator.js)
+  return new Promise(resolve => (win._setTimeout ?? win.setTimeout)(resolve, ms))
+}
+
+async function safeInterval (fn, ms) {
+  // interval function that's not affected by time shenanigans (e.g. infiltrator.js)
+  const interval = win._setInterval ?? win.setInterval
+  return interval(fn, ms)
+}
+
 export default class GymHandler {
   constructor (ns, target, period = 10e3, gym = 'Powerhouse Gym', verbose = false) {
     ns.disableLog('ALL')
@@ -65,12 +77,15 @@ export default class GymHandler {
       if (this.player.money < 200000 || !(await getNsDataThroughFile(this.ns, 'ns.singularity.travelToCity(ns.args[0])', '/Temp/travel-to-city.txt', [targetCity]))) {
         return false
       }
-      await this.ns.asleep(1000)
+      await safeSleep(1000)
     }
     return true
   }
 
-  async train (strTarget = this.target, defTarget = this.target, dexTarget = this.target, agiTarget = this.target, period = this.period, gym = this.gym) {
+  async trainOneRound (strTarget = this.target, defTarget = this.target, dexTarget = this.target, agiTarget = this.target, period = this.period, gym = this.gym) {
+    // Do a single round of training all unreached stats
+    // Return true if all targets have been reached, false otherwise
+
     // Get player info
     this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
     // Validate gym
@@ -78,21 +93,30 @@ export default class GymHandler {
       log(this.ns, `ERROR: unknown gym '${gym}'`)
       return
     }
+
     const targetCity = gymLocations[gym]
-  
     const targetStats = {
       strength: strTarget,
       defense: defTarget,
       dexterity: dexTarget,
       agility: agiTarget
     }
-  
+    // Silently remove any stats that have already been reached
+    for (const stat in targetStats) {
+      if (targetStats[stat] <= this.player.skills[stat]) {
+        delete targetStats[stat]
+      }
+    }
+    if (Object.keys(targetStats).length === 0) {
+      if (this.verbose) log(this.ns, 'All stat targets have already been reached.', false, 'info')
+      return true
+    }
     // Allow the user to stop this script by clicking the "Stop training" button in the UI
     let cancel = false
     const cancelHook = function () {
       const btn = queryFilter('button', 'Stop training at gym')
       if (!btn) return
-      const fn = btn.onclick
+      const fn = btn.onclick // existing click handler
       if (fn._hooked) return
       btn.onclick = () => {
         log(this.ns, 'Stopping training...')
@@ -102,44 +126,52 @@ export default class GymHandler {
       btn.onclick._hooked = true
       log(this.ns, 'Hooked cancel button.')
     }
-  
-    const interval = setInterval(cancelHook, 100)
-  
+    const cancelHookInterval = safeInterval(cancelHook, 100)
+
+    if (this.verbose) log(this.ns, `Current target stats: ${Object.keys(targetStats).join(', ')}`)
     try {
-      /* eslint-disable-next-line no-unmodified-loop-condition */
-      while (!cancel) {
-        if (this.verbose) log(this.ns, `Current target stats: ${Object.keys(targetStats).join(', ')}`)
-        for (const stat in targetStats) {
-          // Break if there's any reason to stop
-          if (cancel) break
-          if (targetStats[stat] < this.player.skills[stat]) {
-            log(this.ns, `Target reached for ${stat}!`)
-            delete targetStats[stat]
-            continue
-          }
-          if (!(await this.ensureCity(targetCity))) {
-            log(`ERROR: could not travel to ${targetCity}. Exiting...`)
-            return
-          }
-          // Update player info
-          this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
-          // Start training
-          if (this.verbose) log(this.ns, `Training ${stat}, target ${targetStats[stat]}`)
-          const result = await this.startGymTraining(stat, gym)
-          if (result === false) {
-            log(this.ns, 'WARN: gym training failed, probably due to unexpected traveling')
-            continue
-          }
-          await this.ns.asleep(period)
-        }
-        if (Object.keys(targetStats).length === 0) {
-          log(this.ns, 'All stat targets have been reached. Exiting...')
+      for (const stat in targetStats) {
+        // Break if there's any reason to stop
+        if (cancel) break
+        if (!(await this.ensureCity(targetCity))) {
+          log(`ERROR: could not travel to ${targetCity}. Exiting...`)
           return
         }
-        await this.ns.asleep(0)
+        // Update player info
+        this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
+        // Start training
+        if (this.verbose) log(this.ns, `Training ${stat}, target ${targetStats[stat]}`)
+        const result = await this.startGymTraining(stat, gym)
+        if (result === false) {
+          log(this.ns, 'WARN: gym training failed, probably due to unexpected traveling')
+          continue
+        }
+        await safeSleep(period)
       }
-    } finally {
-      clearInterval(interval)
+      // Update player info and check if all targets have been reached
+      this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
+      for (const stat in targetStats) {
+        if (targetStats[stat] <= this.player.skills[stat]) {
+          log(this.ns, `Reached target ${stat} of ${targetStats[stat]}`, false, 'success')
+          delete targetStats[stat]
+        }
+      }
+      if (Object.keys(targetStats).length === 0) {
+        log(this.ns, 'All stat targets have been reached.', false, 'success')
+        return true
+      }
+      return false
+    }
+    finally {
+      clearInterval(cancelHookInterval)
+    }
+  }
+
+  async trainContinuous (strTarget = this.target, defTarget = this.target, dexTarget = this.target, agiTarget = this.target, period = this.period, gym = this.gym) {
+    let done = false
+    while (!done) {
+      done = await this.trainOneRound(strTarget, defTarget, dexTarget, agiTarget, period, gym)
+      await this.ns.asleep(0)
     }
   }
   
@@ -155,5 +187,5 @@ export async function main (ns) {
   if (options.stats > options.dexterity) options.dexterity = options.stats
   if (options.stats > options.agility) options.agility = options.stats
   const handler = new GymHandler(ns, options.stats, period, options.gym)
-  await handler.train(options.strength, options.defense, options.dexterity, options.agility, period, options.gym)
+  await handler.trainContinuous(options.strength, options.defense, options.dexterity, options.agility, period, options.gym)
 }

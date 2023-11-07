@@ -392,125 +392,135 @@ async function earnFactionInvite (ns, factionName) {
   const invitations = await checkFactionInvites(ns)
   if (invitations.includes(factionName)) { return await tryJoinFaction(ns, factionName) }
 
-    // Can't join certain factions for various reasons
-    let reasonPrefix = `Cannot join faction "${factionName}" because`;
-    let precludingFaction;
-    if (["Aevum", "Sector-12"].includes(factionName) && (precludingFaction = ["Chongqing", "New Tokyo", "Ishima", "Volhaven"].find(f => joinedFactions.includes(f))) ||
-        ["Chongqing", "New Tokyo", "Ishima"].includes(factionName) && (precludingFaction = ["Aevum", "Sector-12", "Volhaven"].find(f => joinedFactions.includes(f))) ||
-        ["Volhaven"].includes(factionName) && (precludingFaction = ["Aevum", "Sector-12", "Chongqing", "New Tokyo", "Ishima"].find(f => joinedFactions.includes(f))))
-        return ns.print(`${reasonPrefix} precluding faction "${precludingFaction}"" has been joined.`);
-    let requirement;
-    // See if we can take action to earn an invite for the next faction under consideration
-    let workedForInvite = false;
-    // If committing crimes can help us join a faction - we know how to do that
-    let doCrime = false;
-    if ((requirement = requiredKarmaByFaction[factionName]) && -ns.heart.break() < requirement) {
-        ns.print(`${reasonPrefix} you have insufficient Karma. Need: ${-requirement}, Have: ${ns.heart.break()}`);
+  // Can't join certain factions for various reasons
+  let reasonPrefix = `Cannot join faction "${factionName}" because`;
+  let precludingFaction;
+  if (["Aevum", "Sector-12"].includes(factionName) && (precludingFaction = ["Chongqing", "New Tokyo", "Ishima", "Volhaven"].find(f => joinedFactions.includes(f))) ||
+      ["Chongqing", "New Tokyo", "Ishima"].includes(factionName) && (precludingFaction = ["Aevum", "Sector-12", "Volhaven"].find(f => joinedFactions.includes(f))) ||
+      ["Volhaven"].includes(factionName) && (precludingFaction = ["Aevum", "Sector-12", "Chongqing", "New Tokyo", "Ishima"].find(f => joinedFactions.includes(f))))
+      return ns.print(`${reasonPrefix} precluding faction "${precludingFaction}"" has been joined.`);
+  let requirement;
+  // See if we can take action to earn an invite for the next faction under consideration
+  let workedForInvite = false;
+  // If committing crimes can help us join a faction - we know how to do that
+  let doCrime = false;
+  if ((requirement = requiredKarmaByFaction[factionName]) && -ns.heart.break() < requirement) {
+      ns.print(`${reasonPrefix} you have insufficient Karma. Need: ${-requirement}, Have: ${ns.heart.break()}`);
+      doCrime = true;
+  }
+  if ((requirement = requiredKillsByFaction[factionName]) && player.numPeopleKilled < requirement) {
+      ns.print(`${reasonPrefix} you have insufficient kills. Need: ${requirement}, Have: ${player.numPeopleKilled}`);
+      doCrime = true;
+  }
+  // Check on physical stat requirements
+  const physicalStats = ["strength", "defense", "dexterity", "agility"];
+  // Establish some helper functions used to determine how fast we can train a stat
+  const title = s => s && s[0].toUpperCase() + s.slice(1); // Annoyingly bitnode multis capitalize the first letter physical stat name
+  const heuristic = (stat, trainingBitnodeMult) =>
+      Math.sqrt(player.mults[stat] * bitnodeMultipliers[`${title(stat)}LevelMultiplier`] *
+          /* */ player.mults[`${stat}_exp`] * trainingBitnodeMult);
+  const crimeHeuristic = (stat) => heuristic(stat, bitnodeMultipliers.CrimeExpGain); // When training with crime
+  const classHeuristic = (stat) => heuristic(stat, bitnodeMultipliers.ClassGymExpGain); // When training in university
+  // Check which stats need to be trained up
+  requirement = requiredCombatByFaction[factionName];
+  let deficientStats = !requirement ? [] : physicalStats.map(stat => ({ stat, value: player.skills[stat] })).filter(stat => stat.value < requirement);
+  // Hash for special-case factions (just 'Daedalus' for now) requiring *either* hacking *or* combat
+  if (reqHackingOrCombat.includes(factionName) && deficientStats.length > 0 && (
+      // Compare roughly how long it will take to train up our hacking stat
+      (requiredHackByFaction[factionName] - player.skills.hacking) / classHeuristic('hacking') <
+      // To the slowest time it will take to train up our deficient physical stats
+      Math.min(...deficientStats.map(s => (requiredCombatByFaction[factionName] - s.value) / crimeHeuristic(s.stat)))))
+      ns.print(`Ignoring combat requirement for ${factionName} as we are more likely to unlock them via hacking stats.`);
+  else if (deficientStats.length > 0) {
+      ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
+          physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", "));
+      const em = requirement / options['training-stat-per-multi-threshold'];
+      // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time. TODO: Be smarter
+      if (deficientStats.map(s => s.stat).some(s => crimeHeuristic(s) < em))
+          return ns.print("Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. " +
+              `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
+              `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
+                  `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
+                  `${formatNumberShort(bitnodeMultipliers[`${title(s)}LevelMultiplier`])}*` +
+                  `${formatNumberShort(bitnodeMultipliers.CrimeExpGain)})=${formatNumberShort(crimeHeuristic(s))}`).join(", "));
+      // If gym training is disabled, just do crime to train up physical stats
+      if (options['no-gym']) {
+        ns.print(`--no-gym is set, so physical stats will be trained via crime.`)
         doCrime = true;
-    }
-    if ((requirement = requiredKillsByFaction[factionName]) && player.numPeopleKilled < requirement) {
-        ns.print(`${reasonPrefix} you have insufficient kills. Need: ${requirement}, Have: ${player.numPeopleKilled}`);
-        doCrime = true;
-    }
-    // Check on physical stat requirements
-    const physicalStats = ["strength", "defense", "dexterity", "agility"];
-    // Establish some helper functions used to determine how fast we can train a stat
-    const title = s => s && s[0].toUpperCase() + s.slice(1); // Annoyingly bitnode multis capitalize the first letter physical stat name
-    const heuristic = (stat, trainingBitnodeMult) =>
-        Math.sqrt(player.mults[stat] * bitnodeMultipliers[`${title(stat)}LevelMultiplier`] *
-            /* */ player.mults[`${stat}_exp`] * trainingBitnodeMult);
-    const crimeHeuristic = (stat) => heuristic(stat, bitnodeMultipliers.CrimeExpGain); // When training with crime
-    const classHeuristic = (stat) => heuristic(stat, bitnodeMultipliers.ClassGymExpGain); // When training in university
-    // Check which stats need to be trained up
-    requirement = requiredCombatByFaction[factionName];
-    let deficientStats = !requirement ? [] : physicalStats.map(stat => ({ stat, value: player.skills[stat] })).filter(stat => stat.value < requirement);
-    // Hash for special-case factions (just 'Daedalus' for now) requiring *either* hacking *or* combat
-    if (reqHackingOrCombat.includes(factionName) && deficientStats.length > 0 && (
-        // Compare roughly how long it will take to train up our hacking stat
-        (requiredHackByFaction[factionName] - player.skills.hacking) / classHeuristic('hacking') <
-        // To the slowest time it will take to train up our deficient physical stats
-        Math.min(...deficientStats.map(s => (requiredCombatByFaction[factionName] - s.value) / crimeHeuristic(s.stat)))))
-        ns.print(`Ignoring combat requirement for ${factionName} as we are more likely to unlock them via hacking stats.`);
-    else if (deficientStats.length > 0) {
-        ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
-            physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", "));
-        const em = requirement / options['training-stat-per-multi-threshold'];
-        // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time. TODO: Be smarter
-        if (deficientStats.map(s => s.stat).some(s => crimeHeuristic(s) < em))
-            return ns.print("Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. " +
-                `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
-                `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
-                    `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
-                    `${formatNumberShort(bitnodeMultipliers[`${title(s)}LevelMultiplier`])}*` +
-                    `${formatNumberShort(bitnodeMultipliers.CrimeExpGain)})=${formatNumberShort(crimeHeuristic(s))}`).join(", "));
-        // If gym training is disabled, just do crime to train up physical stats
-        if (options['no-gym']) {
-          ns.print(`--no-gym is set, so physical stats will be trained via crime.`)
-          doCrime = true;
-        } else {
-          // Otherwise, train up physical stats in the gym, assuming we have sufficient money to do so
-          if (player.money > options['pay-for-studies-threshold']) {
-            const gymHandler = new GymHandler(ns, requirement);
-            ns.print(`Training at ${gymHandler.gym} to meet requirements...`)
-            await gymHandler.train()
-          } else {
-            ns.print(`${reasonPrefix} you have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
-                `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for gym training. Resorting to a life of crime...`);
-            // TODO: local/cheaper gym training if Powerhouse is out of reach?
-            doCrime = true;
-          }
-        }
-    }
-    if (doCrime && options['no-crime'])
-        return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);
-    if (doCrime)
-        workedForInvite = await crimeForKillsKarmaStats(ns, requiredKillsByFaction[factionName] || 0, requiredKarmaByFaction[factionName] || 0, requiredCombatByFaction[factionName] || 0);
-
-    // Study for hack levels if that's what's keeping us
-    // Note: Check if we have insuffient hack to backdoor this faction server. If we have sufficient hack, we will "waitForInvite" below assuming an external script is backdooring ASAP 
-    let serverReqHackingLevel = 0;
-    if (requirement = requiredBackdoorByFaction[factionName]) {
-        serverReqHackingLevel = await getServerRequiredHackLevel(ns, requirement);
-        if (player.skills.hacking < serverReqHackingLevel) {
-            ns.print(`${reasonPrefix} you must first backdoor ${requirement}, which needs hack: ${serverReqHackingLevel}, Have: ${player.skills.hacking}`);
-        }
-    }
-    requirement = Math.max(serverReqHackingLevel, requiredHackByFaction[factionName] || 0)
-    if (requirement && player.skills.hacking < requirement &&
-        // Special case (Daedalus): Don't grind for hack requirement if we previously did a grind for the physical requirements
-        !(reqHackingOrCombat.includes(factionName) && workedForInvite)) {
-        ns.print(`${reasonPrefix} you have insufficient hack level. Need: ${requirement}, Have: ${player.skills.hacking}`);
-        const em = requirement / options['training-stat-per-multi-threshold'];
-        if (options['no-studying'])
-            return ns.print(`--no-studying is set, nothing we can do to improve hack level.`);
-        else if (classHeuristic('hacking') < em)
-            return ns.print(`Your combination of Hacking mult (${formatNumberShort(player.mults.hacking)}), exp_mult ` +
-                `(${formatNumberShort(player.mults.hacking_exp)}), and bitnode hacking / study exp mults ` +
-                `(${formatNumberShort(bitnodeMultipliers.HackingLevelMultiplier)}) / (${formatNumberShort(bitnodeMultipliers.ClassGymExpGain)}) ` +
-                `are probably too low to increase hack from ${player.skills.hacking} to ${requirement} in a reasonable amount of time ` +
-                `(${formatNumberShort(classHeuristic('hacking'))} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
-        let studying = false;
-        if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
-            if (player.city != "Volhaven") await goToCity(ns, "Volhaven");
-            studying = await study(ns, false, "Algorithms");
-        } else if (uniByCity[player.city]) // Otherwise only go to free university if our city has a university
-            studying = await study(ns, false, "Study Computer Science");
-        else
-            return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
-                `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for studies, and your current ` +
-                `city ${player.city} does not have a university from which to take free computer science.`);
-        if (studying)
-            workedForInvite = await monitorStudies(ns, 'hacking', requirement);
-        // If we studied for hacking, and were awaiting a backdoor, spawn the backdoor script now  
-        if (workedForInvite && serverReqHackingLevel) {
-            player = await getPlayerInfo(ns);
-            if (player.skills.hacking > requirement) {
-                ns.print(`Current hacking level ${player.skills.hacking} seems to now meet the backdoor requirement ${requirement}. Spawning backdoor-all-servers.js...`);
-                ns.run(getFilePath("/Tasks/backdoor-all-servers.js"));
+      } else {
+        // Otherwise, train up physical stats in the gym, assuming we have sufficient money to do so
+        if (player.money > options['pay-for-studies-threshold']) {
+          const gymHandler = new GymHandler(ns, requirement);
+          ns.print(`Training at ${gymHandler.gym} to meet requirements...`)
+          let trainingComplete = false;
+          while (!trainingComplete) {
+            trainingComplete = await gymHandler.trainOneRound()
+            if (breakToMainLoop()) return false;
+            // If possible, spend hashes to speed up training
+            // TODO: set up an interval to check this, so it's not only once every ~40s ?
+            const hashesSpent = await trySpendHashes(ns, "Improve Gym Training")
+            if (hashesSpent) {
+              log(ns, `Bought a gym training upgrade for ${hashesSpent} hashes.`, false, 'success')
             }
+          }
+        } else {
+          ns.print(`${reasonPrefix} you have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+              `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for gym training. Resorting to a life of crime...`);
+          // TODO: local/cheaper gym training if Powerhouse is out of reach?
+          doCrime = true;
         }
-    }
-    if (breakToMainLoop()) return false;
+      }
+  }
+  if (doCrime && options['no-crime'])
+      return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);
+  if (doCrime)
+      workedForInvite = await crimeForKillsKarmaStats(ns, requiredKillsByFaction[factionName] || 0, requiredKarmaByFaction[factionName] || 0, requiredCombatByFaction[factionName] || 0);
+
+  // Study for hack levels if that's what's keeping us
+  // Note: Check if we have insuffient hack to backdoor this faction server. If we have sufficient hack, we will "waitForInvite" below assuming an external script is backdooring ASAP 
+  let serverReqHackingLevel = 0;
+  if (requirement = requiredBackdoorByFaction[factionName]) {
+      serverReqHackingLevel = await getServerRequiredHackLevel(ns, requirement);
+      if (player.skills.hacking < serverReqHackingLevel) {
+          ns.print(`${reasonPrefix} you must first backdoor ${requirement}, which needs hack: ${serverReqHackingLevel}, Have: ${player.skills.hacking}`);
+      }
+  }
+  requirement = Math.max(serverReqHackingLevel, requiredHackByFaction[factionName] || 0)
+  if (requirement && player.skills.hacking < requirement &&
+      // Special case (Daedalus): Don't grind for hack requirement if we previously did a grind for the physical requirements
+      !(reqHackingOrCombat.includes(factionName) && workedForInvite)) {
+      ns.print(`${reasonPrefix} you have insufficient hack level. Need: ${requirement}, Have: ${player.skills.hacking}`);
+      const em = requirement / options['training-stat-per-multi-threshold'];
+      if (options['no-studying'])
+          return ns.print(`--no-studying is set, nothing we can do to improve hack level.`);
+      else if (classHeuristic('hacking') < em)
+          return ns.print(`Your combination of Hacking mult (${formatNumberShort(player.mults.hacking)}), exp_mult ` +
+              `(${formatNumberShort(player.mults.hacking_exp)}), and bitnode hacking / study exp mults ` +
+              `(${formatNumberShort(bitnodeMultipliers.HackingLevelMultiplier)}) / (${formatNumberShort(bitnodeMultipliers.ClassGymExpGain)}) ` +
+              `are probably too low to increase hack from ${player.skills.hacking} to ${requirement} in a reasonable amount of time ` +
+              `(${formatNumberShort(classHeuristic('hacking'))} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
+      let studying = false;
+      if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
+          if (player.city != "Volhaven") await goToCity(ns, "Volhaven");
+          studying = await study(ns, false, "Algorithms");
+      } else if (uniByCity[player.city]) // Otherwise only go to free university if our city has a university
+          studying = await study(ns, false, "Study Computer Science");
+      else
+          return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+              `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for studies, and your current ` +
+              `city ${player.city} does not have a university from which to take free computer science.`);
+      if (studying)
+          workedForInvite = await monitorStudies(ns, 'hacking', requirement);
+      // If we studied for hacking, and were awaiting a backdoor, spawn the backdoor script now  
+      if (workedForInvite && serverReqHackingLevel) {
+          player = await getPlayerInfo(ns);
+          if (player.skills.hacking > requirement) {
+              ns.print(`Current hacking level ${player.skills.hacking} seems to now meet the backdoor requirement ${requirement}. Spawning backdoor-all-servers.js...`);
+              ns.run(getFilePath("/Tasks/backdoor-all-servers.js"));
+          }
+      }
+  }
+  if (breakToMainLoop()) return false;
 
   // Skip factions whose remaining requirement is money. There's not much we can do to earn money
   if ((requirement = requiredMoneyByFaction[factionName]) && player.money < requirement) { return ns.print(`${reasonPrefix} you have insufficient money. Need: ${formatMoney(requirement)}, Have: ${formatMoney(player.money)}`) }
