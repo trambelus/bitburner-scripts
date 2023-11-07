@@ -6,6 +6,15 @@ const spawnDelay = 50; // Delay to allow time for `installBackdoor` to start run
  * Scan all servers, backdoor anything that can be backdoored, and leave a file to indicate it's been done
  * Requires: SF-4.1 **/
 export let main = async ns => {
+    // Exit if there's already an instance of this script running with the same arguments
+    ns.disableLog('ALL');
+    let thisScript = ns.getScriptName(),
+        thisArgs = ns.args.join(' ');
+    let existingPid = ns.ps().filter(s => s.filename == thisScript && s.args.join(' ') == thisArgs).map(s => s.pid)[0];
+    if (existingPid && existingPid != ns.pid) {
+        ns.print(`INFO: Another instance of this script is already running with the same arguments (PID ${existingPid}). Exiting...`);
+        return;
+    }
     let anyConnected = false;
     try {
         let servers = ["home"],
@@ -49,7 +58,7 @@ export let main = async ns => {
                 ns.singularity.connect(hop);
             if (server === "w0r1d_d43m0n") {
                 ns.alert("Ready to hack w0r1d_d43m0n!");
-                while (true) await ns.sleep(10000); // Sleep forever so the script isn't run multiple times to create multiple overlapping alerts
+                while (true) await ns.sleep(600000); // Sleep forever so the script isn't run multiple times to create multiple overlapping alerts
             }
             ns.print(`Installing backdoor on "${server}"...`);
             // Kick off a separate script that will run backdoor before we connect to home.
