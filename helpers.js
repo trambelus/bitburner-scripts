@@ -484,6 +484,19 @@ export function checkNsInstance(ns, fnName = "this function") {
     return ns;
 }
 
+/** A helper to get arbitrary JSON data from a file, or null if the file does not exist 
+ * @param {NS} ns 
+ * @param {string} fileName 
+ * @returns {any}
+ */
+export function getJsonData(ns, fileName) {
+    checkNsInstance(ns, '"getJsonData"');
+    const data = ns.read(fileName);
+    if (!data) return null;
+    try { return JSON.parse(data); }
+    catch (err) { throw new Error(`Failed to parse JSON data from ${fileName}: ${err.message || JSON.stringify(err)}`); }
+}
+
 /** A helper to parse the command line arguments with a bunch of extra features, such as
  * - Loading a persistent defaults override from a local config file named after the script.
  * - Rendering "--help" output without all scripts having to explicitly specify it

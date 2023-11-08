@@ -53,7 +53,7 @@ export function kill (ns, targetScript, targetServer) {
   }
 }
 
-export async function autocomplete (data) {
+export function autocomplete (data) {
   // autocomplete for script names (TODO: server names too?)
   return data.scripts
 }

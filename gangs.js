@@ -1,6 +1,6 @@
 import {
   log, getConfiguration, instanceCount, getNsDataThroughFile, getActiveSourceFiles, runCommand, tryGetBitNodeMultipliers,
-  formatMoney, formatNumberShort, formatDuration
+  formatMoney, formatNumberShort, formatDuration, getJsonData
 } from './helpers.js'
 
 // Global config
@@ -66,8 +66,11 @@ export function autocomplete (data, _) {
   return []
 }
 
+let gangMemberNamePool = null; // Pool of names to use when recruiting new members, grouped by gang faction name and specified in an external file
+
 /** @param {NS} ns **/
 export async function main (ns) {
+  gangMemberNamePool = getJsonData(ns, 'Resources/gang-member-names.txt'); // might remain null, but that's fine
   const runOptions = getConfiguration(ns, argsSchema)
   if (!runOptions || await instanceCount(ns) > 1) return // Prevent multiple instances of this script from being started, even with different args.
   options = runOptions // We don't set the global "options" until we're sure this is the only running instance
@@ -379,9 +382,22 @@ async function fixWantedGainRate (ns, myGangInfo, wantedGainTolerance = 0) {
 /** @param {NS} ns
  * Recruit new members if available **/
 async function doRecruitMember (ns) {
-  let i = 0; let newMemberName
-  do { newMemberName = `Thug ${++i}` } while (myGangMembers.includes(newMemberName) || myGangMembers.includes(newMemberName + ' Understudy'))
-  if (i < myGangMembers.length) newMemberName += ' Understudy' // Pay our respects to the deceased
+  let newMemberName = null
+  const nameList = gangMemberNamePool?.[myGangFaction]?.sort(() => Math.random() - 0.5) // Randomize the order of names we try to recruit
+  if (nameList && nameList.length > 0) {
+    for (let j = 0; j < nameList.length; j++) {
+      if (!myGangMembers.includes(nameList[j])) {
+        newMemberName = nameList[j]
+        break
+      }
+    }
+  }
+  // If we don't have a name list, or we've exhausted the name list, just use a generic name
+  if (!newMemberName) {
+    let i = 0;
+    do { newMemberName = `Thug ${++i}` } while (myGangMembers.includes(newMemberName))
+  }
+  // TODO: figure out a new way to pay respects to the deceased, if we're replacing a dead member
   if (await getNsDataThroughFile(ns, 'ns.gang.canRecruitMember() && ns.gang.recruitMember(ns.args[0])', '/Temp/gang-recruit-member.txt', [newMemberName])) {
     myGangMembers.push(newMemberName)
     assignedTasks[newMemberName] = 'Train ' + (isHackGang ? 'Hacking' : 'Combat')
