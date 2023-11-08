@@ -131,14 +131,14 @@ export default class GymHandler {
     if (this.verbose) log(this.ns, `Current target stats: ${Object.keys(targetStats).join(', ')}`)
     try {
       for (const stat in targetStats) {
+        // Update player info
+        this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
         // Break if there's any reason to stop
         if (cancel) break
         if (!(await this.ensureCity(targetCity))) {
           log(`ERROR: could not travel to ${targetCity}. Exiting...`)
           return
         }
-        // Update player info
-        this.player = await getNsDataThroughFile(this.ns, 'ns.getPlayer()', '/Temp/player-info.txt')
         // Start training
         if (this.verbose) log(this.ns, `Training ${stat}, target ${targetStats[stat]}`)
         const result = await this.startGymTraining(stat, gym)
