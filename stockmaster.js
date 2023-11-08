@@ -37,6 +37,7 @@ const argsSchema = [
     ['l', false], // Stop any other running stockmaster.js instances and sell all stocks
     ['liquidate', false], // Long-form alias for the above flag.
     ['mock', false], // If set to true, will "mock" buy/sell but not actually buy/sell anything
+    ['monitor', false], // If set to true, will only monitor stocks and not buy/sell anything
     ['noisy', false], // If set to true, tprints and announces each time stocks are bought/sold
     ['disable-shorts', false], // If set to true, will not short any stocks. Will be set depending on having SF8.2 by default.
     ['reserve', null], // A fixed amount of money to not spend
@@ -184,7 +185,7 @@ export async function main (ns) {
           if (pre4s && stk.ticksHeld < pre4sMinHoldTime) {
             if (!stk.warnedBadPurchase) log(ns, `WARNING: Thinking of selling ${stk.sym} with ER ${formatBP(stk.absReturn())}, but holding out as it was purchased just ${stk.ticksHeld} ticks ago...`)
             stk.warnedBadPurchase = true // Hack to ensure we don't spam this warning
-          } else {
+          } else if (!options.monitor) {
             sales += await doSellAll(ns, stk)
             stk.warnedBadPurchase = false
           }
@@ -232,7 +233,9 @@ export async function main (ns) {
                             `\nBudget: ${formatMoney(budget)} can only buy ${numShares.toLocaleString('en')} ${owned ? 'more ' : ''}shares @ ${formatMoney(purchasePrice)}. ` +
                             `\nGiven an estimated ${marketCycleLength - estTick} ticks left in market cycle, less ${stk.timeToCoverTheSpread().toFixed(1)} ticks to cover the spread (${(stk.spread_pct * 100).toFixed(2)}%), ` +
                             `remaining ${ticksBeforeCycleEnd.toFixed(1)} ticks would only generate ${formatMoney(estEndOfCycleValue)}, which is less than 2x commission (${formatMoney(2 * commission, 3)})`)
-          } else { cash -= await doBuy(ns, stk, numShares) }
+          } else if (!options.monitor) {
+            cash -= await doBuy(ns, stk, numShares)
+          }
         }
       }
     } catch (err) {
@@ -466,6 +469,7 @@ let transactStock = async (ns, sym, numShares, action) =>
 /** @param {NS} ns
  * Automatically buys either a short or long position depending on the outlook of the stock. */
 async function doBuy(ns, stk, sharesToBuy) {
+    // If we're in monitor mode, don't actually buy anything
     // We include -2*commission in the "holdings value" of our stock, but if we make repeated purchases of the same stock, we have to track
     // the additional commission somewhere. So only subtract it from our running profit if this isn't our first purchase of this symbol
     let price = 0; //price wasn't defined yet.
