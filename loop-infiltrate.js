@@ -7,9 +7,9 @@ const doc = win['document']
 let _ns
 
 const argsSchema = [
-  ['no-auto-sell', false] // disable automatically selling the intel at the end of the loop
+  ['auto-sell', false] // disable automatically selling the intel at the end of the loop
 ]
-let noAutoSell = false
+let autoSell = false
 const failLimit = 3
 
 export function autocomplete (data) {
@@ -24,7 +24,7 @@ export async function main (ns) {
   _ns.tail()
   const options = _ns.flags(argsSchema)
   ns.print(`Running with options: ${JSON.stringify(options, (k, v) => k !== '_' ? v : undefined, 2)}`)
-  noAutoSell = options['no-auto-sell']
+  autoSell = options['auto-sell']
   try {
     await mainLoop()
   } catch (err) {
@@ -48,8 +48,8 @@ async function mainLoop () {
     }
     const checkbox = doc.createElement('input')
     checkbox.type = 'checkbox'
-    checkbox.checked = !noAutoSell
-    checkbox.onchange = () => { noAutoSell = !checkbox.checked }
+    checkbox.checked = autoSell
+    checkbox.onchange = () => { autoSell = checkbox.checked }
     const label = doc.createElement('label')
     label.innerText = 'Auto-sell'
     label.appendChild(checkbox)
@@ -119,7 +119,7 @@ async function mainLoop () {
       }
       console.log('---INFILTRATION SUCCESS---')
       consecutiveFails = 0
-      if (!noAutoSell) {
+      if (autoSell) {
         // automatically click sell button
         const sellBtn = queryFilter('button', 'Sell')
         log(_ns, `Selling for ${sellBtn?.innerText.split('\n').at(-1)}`)
