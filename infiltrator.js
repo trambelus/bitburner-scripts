@@ -157,9 +157,6 @@ export function wrapEventListeners () {
     _doc._addEventListener = _doc.addEventListener
 
     _doc.addEventListener = function (type, callback, options) {
-      if (typeof options === 'undefined') {
-        options = false
-      }
       let handler = false
 
       // For this script, we only want to modify "keydown" events.
@@ -170,10 +167,13 @@ export function wrapEventListeners () {
 
             for (const key in args[0]) {
               if (key === 'isTrusted') {
+                // If the event has an "isTrusted" member, set it to true
                 hackedEv.isTrusted = true
               } else if (typeof args[0][key] === 'function') {
+                // For function members of the event, bind them to the original
                 hackedEv[key] = args[0][key].bind(args[0])
               } else {
+                // For everything else, just copy it over
                 hackedEv[key] = args[0][key]
               }
             }
@@ -184,6 +184,7 @@ export function wrapEventListeners () {
           return callback.apply(callback, args)
         }
 
+        // Copy over all members of the original callback
         for (const prop in callback) {
           if (typeof callback[prop] === 'function') {
             handler[prop] = callback[prop].bind(callback)
@@ -193,17 +194,17 @@ export function wrapEventListeners () {
         }
       }
 
-      if (!this.eventListeners) {
-        this.eventListeners = {}
-      }
-      if (!this.eventListeners[type]) {
-        this.eventListeners[type] = []
-      }
-      this.eventListeners[type].push({
-        listener: callback,
-        useCapture: options,
-        wrapped: handler
-      })
+      // if (!this.eventListeners) {
+      //   this.eventListeners = {}
+      // }
+      // if (!this.eventListeners[type]) {
+      //   this.eventListeners[type] = []
+      // }
+      // this.eventListeners[type].push({
+      //   listener: callback,
+      //   useCapture: options,
+      //   wrapped: handler
+      // })
 
       return this._addEventListener(
         type,
@@ -217,34 +218,31 @@ export function wrapEventListeners () {
     _doc._removeEventListener = _doc.removeEventListener
 
     _doc.removeEventListener = function (type, callback, options) {
-      if (typeof options === 'undefined') {
-        options = false
-      }
 
-      if (!this.eventListeners) {
-        this.eventListeners = {}
-      }
-      if (!this.eventListeners[type]) {
-        this.eventListeners[type] = []
-      }
+      // if (!this.eventListeners) {
+      //   this.eventListeners = {}
+      // }
+      // if (!this.eventListeners[type]) {
+      //   this.eventListeners[type] = []
+      // }
 
-      for (let i = 0; i < this.eventListeners[type].length; i++) {
-        if (
-          this.eventListeners[type][i].listener === callback &&
-          this.eventListeners[type][i].useCapture === options
-        ) {
-          if (this.eventListeners[type][i].wrapped) {
-            callback = this.eventListeners[type][i].wrapped
-          }
+      // for (let i = 0; i < this.eventListeners[type].length; i++) {
+      //   if (
+      //     this.eventListeners[type][i].listener === callback &&
+      //     this.eventListeners[type][i].useCapture === options
+      //   ) {
+      //     if (this.eventListeners[type][i].wrapped) {
+      //       callback = this.eventListeners[type][i].wrapped
+      //     }
 
-          this.eventListeners[type].splice(i, 1)
-          break
-        }
-      }
+      //     this.eventListeners[type].splice(i, 1)
+      //     break
+      //   }
+      // }
 
-      if (this.eventListeners[type].length === 0) {
-        delete this.eventListeners[type]
-      }
+      // if (this.eventListeners[type].length === 0) {
+      //   delete this.eventListeners[type]
+      // }
 
       return this._removeEventListener(type, callback, options)
     }
@@ -840,9 +838,10 @@ export async function simulateAugInstall(ns, player, upgrades, bnMults, wks) {
   // Apply the upgrades
   for (const stat in simulatedPlayer.mults) {
     if (upgrades.hasOwnProperty(stat)) {
-      simulatedPlayer.mults[stat] *= upgrades[stat]
+      // stat may be specified in x*y*z format, so multiply it all together before applying it
+      simulatedPlayer.mults[stat] *= upgrades[stat].split('*').reduce((a, b) => a * b)
     } else if (upgrades.hasOwnProperty('all') && stats.includes(stat)) {
-      simulatedPlayer.mults[stat] *= upgrades['all']
+      simulatedPlayer.mults[stat] *= upgrades['all'].split('*').reduce((a, b) => a * b)
     }
   }
   log(ns, `Simulated player: ${JSON.stringify(simulatedPlayer.mults, null, 2)}`)
