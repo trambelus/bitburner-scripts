@@ -32,6 +32,7 @@ const argsSchema = [ // The set of all command line arguments
     ['no-gym', false], // Set to true to pass --no-gym to work-for-factions.js
     ['on-completion-script', null], // Spawn this script when we defeat the bitnode
     ['on-completion-script-args', []], // Optional args to pass to the script when we defeat the bitnode
+    ['kickoff', false], // Set to true to run startup tasks, run the main loop once, then exit
 ];
 export function autocomplete(data, args) {
     data.flags(argsSchema);
@@ -80,6 +81,7 @@ export async function main(ns) {
             if (!startUpRan) startUpRan = await startUp(ns);
             // Main loop: Monitor progress in the current BN and automatically reset when we can afford TRP, or N augs.
             await mainLoop(ns);
+            if (options['kickoff']) return; // If we're just running once, exit now.
         }
         catch (err) {
             log(ns, `WARNING: autopilot.js Caught (and suppressed) an unexpected error:\n` +
@@ -245,8 +247,16 @@ async function checkIfBnIsComplete(ns, player) {
     if (resetInfo.currentNode == 10) { // Suggest the user doesn't reset until they buy all sleeves and max memory
         const shouldHaveSleeveCount = Math.min(8, 6 + (dictOwnedSourceFiles[10] || 0));
         const numSleeves = await getNsDataThroughFile(ns, `ns.sleeve.getNumSleeves()`);
-        if (numSleeves < shouldHaveSleeveCount) {
-            log(ns, `WARNING: Detected that you only have ${numSleeves} sleeves, but you could have ${shouldHaveSleeveCount}.` +
+        // Get memory value for each sleeve, and sum them up
+        let totalMem = 0;
+        for (let i = 0; i < numSleeves; i++)
+            totalMem += Number(await getNsDataThroughFile(ns, `ns.sleeve.getSleeve(ns.args[0]).memory`, null, [i]));
+
+        if (numSleeves < shouldHaveSleeveCount || totalMem < 100 * numSleeves) {
+            const reasonStr = numSleeves < shouldHaveSleeveCount
+                ? `only ${numSleeves} sleeves, but you could have ${shouldHaveSleeveCount}`
+                : `an average of only ${Math.round(totalMem / numSleeves)}/100 memory per sleeve`;
+            log(ns, `WARNING: Detected that you have ${reasonStr}.` +
                 `\nTry not to leave BN10 before buying all you can from the faction "The Covenant", especially sleeve memory!` +
                 `\nNOTE: You can ONLY buy sleeves/memory from The Covenant in BN10, which is why it's important to do this before you leave.`, true);
             return bnCompletionSuppressed = true;
@@ -401,7 +411,7 @@ async function checkOnRunningScripts(ns, player) {
     // Default work for faction args we think are ideal for speed-running BNs
     const workForFactionsArgs = [
         "--fast-crimes-only", // Essentially means we do mug until we can do homicide, then stick to homicide
-        "--get-invited-to-every-faction" // Join factions even we have all their augs. Good for having NeuroFlux providers
+        "--get-invited-to-every-faction", // Join factions even we have all their augs. Good for having NeuroFlux providers
     ];
   
     if (options['no-crime']) workForFactionsArgs[0] = "--no-crime"; // Replace the first arg, because it would conflict with --no-crime
