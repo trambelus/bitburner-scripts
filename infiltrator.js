@@ -32,7 +32,10 @@ const argsSchema = [
   ['stop', false], // set to stop the old service and not start a new one
   ['timeFactor', 0.2], // interval multiplier to apply during infiltrations (set to 1 to disable)
   ['keyDelay', 1], // delay in ms between keystrokes
-  ['allowedHost', 'home'] // error out if running anywhere other than here (service logic is dependent on local file system)
+  ['allowedHost', 'home'], // error out if running anywhere other than here (service logic is dependent on local file system)
+  ['listLocations', false], // don't run the service, just list the locations and rewards
+  ['preview', ''] // don't run the service, just preview the effects of installing a set of augments
+    // (useful for knowing whether the next augment install will ruin your rep gains)
 ]
 
 export function autocomplete (data) {
@@ -792,8 +795,8 @@ function calcReward (player, startingDifficulty) {
   return difficulty
 }
 
-function getAllRewards (ns, bnMults, player, wks = false, display = false) {
-  const locations = [...locationInfo]
+export function getAllRewards (ns, bnMults, player, wks = false, display = false) {
+  const locations = JSON.parse(JSON.stringify(locationInfo)) // deep copy
   for (const location of locations) {
     const levelBonus = location.maxClearanceLevel * Math.pow(1.01, location.maxClearanceLevel)
     const reward = calcReward(player, location.startingSecurityLevel)
@@ -827,8 +830,46 @@ function getAllRewards (ns, bnMults, player, wks = false, display = false) {
   return locations
 }
 
-// SoA aug check
+export async function simulateAugInstall(ns, player, upgrades, bnMults, wks) {
+  // Create a copy of the player object to avoid modifying the original
+  const simulatedPlayer = JSON.parse(JSON.stringify(player))
 
+  // Define the stats that can be specified by 'all' key
+  const stats = ['strength', 'strength_exp', 'defense', 'defense_exp', 'dexterity', 'dexterity_exp', 'agility', 'agility_exp', 'charisma', 'charisma_exp'];
+
+  // Apply the upgrades
+  for (const stat in simulatedPlayer.mults) {
+    if (upgrades.hasOwnProperty(stat)) {
+      simulatedPlayer.mults[stat] *= upgrades[stat]
+    } else if (upgrades.hasOwnProperty('all') && stats.includes(stat)) {
+      simulatedPlayer.mults[stat] *= upgrades['all']
+    }
+  }
+  log(ns, `Simulated player: ${JSON.stringify(simulatedPlayer.mults, null, 2)}`)
+
+  // Calculate the rewards for the original player
+  const originalRewards = getAllRewards(ns, bnMults, player, wks, false)
+
+  // Calculate the rewards for the simulated player
+  const simulatedRewards = getAllRewards(ns, bnMults, simulatedPlayer, wks, false)
+
+  // Find the ECorp location in the rewards
+  const simulatedECorp = simulatedRewards.find(r => r.name === 'ECorp')
+  const originalECorp = originalRewards.find(r => r.name === 'ECorp')
+
+  // Compare the rewards
+  if (simulatedECorp && originalECorp) {
+    // Are they the same?
+    if (simulatedECorp.repGain === originalECorp.repGain && simulatedECorp.moneyGain === originalECorp.moneyGain) {
+      log(ns, 'The rep and money gains are unchanged.', true)
+      log(ns, `For ECorp, the rep gain would be ${formatNumberShort(simulatedECorp.repGain)}, and the money gain would be ${formatMoney(simulatedECorp.moneyGain)}.`, true)
+    } else {
+      log(ns, `For ECorp, the rep gain would change from ${formatNumberShort(originalECorp.repGain)} to ${formatNumberShort(simulatedECorp.repGain)}, and the money gain would change from ${formatMoney(originalECorp.moneyGain)} to ${formatMoney(simulatedECorp.moneyGain)}.`, true)
+    }
+  }
+}
+
+// SoA aug check
 async function hasSoaAug (ns) {
   try {
     const augs = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations()', '/Temp/player-augs-installed.txt')
@@ -886,6 +927,25 @@ export async function main (ns) {
     await stopPrevService(ns, serviceName)
     return
   }
+  // get BN multipliers first to feed reward info to infiltration service
+  const bnMults = await tryGetBitNodeMultipliers(ns) ?? { InfiltrationRep: 1, InfiltrationMoney: 1 }
+  const player = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')
+  const wks = await hasSoaAug(ns)
+
+  if (options.listLocations) {
+    getAllRewards(ns, bnMults, player, wks, true)
+    return
+  }
+  if (options.preview) {
+    try {
+      const upgrades = JSON.parse(options.preview)
+      await simulateAugInstall(ns, player, upgrades, bnMults, wks)
+    }
+    catch (err) {
+      log(ns, `ERROR: Could not parse upgrade string: ${err.toString()}`, true)
+    }
+    return
+  }
   infiltrationTimeFactor = options.timeFactor
   keyDelay = options.keyDelay
   // ensure that we're running this on home, if necessary
@@ -894,10 +954,6 @@ export async function main (ns) {
     log(ns, `ERROR: script is running on ${host}, not on ${options.allowedHost} as required. Exiting.`, true)
     return
   }
-  // get BN multipliers first to feed reward info to infiltration service
-  const bnMults = await tryGetBitNodeMultipliers(ns) ?? { InfiltrationRep: 1, InfiltrationMoney: 1 }
-  const player = await getNsDataThroughFile(ns, 'ns.getPlayer()', '/Temp/player-info.txt')
-  const wks = await hasSoaAug(ns)
   log(ns, `Time factor: ${infiltrationTimeFactor}`, true)
   log(ns, `Infiltration multipliers: ${bnMults?.InfiltrationRep}× rep, ${bnMults?.InfiltrationMoney}× money`, true)
   log(ns, `WKS harmonizer aug: ${wks ? 'yes' : 'no'}`, true)
