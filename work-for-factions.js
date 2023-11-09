@@ -444,9 +444,14 @@ async function earnFactionInvite (ns, factionName) {
                   `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
                   `${formatNumberShort(bitnodeMultipliers[`${title(s)}LevelMultiplier`])}*` +
                   `${formatNumberShort(bitnodeMultipliers.CrimeExpGain)})=${formatNumberShort(crimeHeuristic(s))}`).join(", "));
+      const resetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
       // If gym training is disabled, just do crime to train up physical stats
       if (options['no-gym']) {
         ns.print(`--no-gym is set, so physical stats will be trained via crime.`)
+        doCrime = true;
+      } else if (options['crime-focus'] && resetInfo.currentNode !== 2 && -54000 < ns.heart.break()) {
+        ns.print(`--crime-focus is set, so physical stats will be trained via crime until we have enough karma to establish a gang.`)
+        ns.print(`Currently at ${formatNumberShort(ns.heart.break())} karma; need -54k.`)
         doCrime = true;
       } else {
         // Otherwise, train up physical stats in the gym, assuming we have sufficient money to do so
