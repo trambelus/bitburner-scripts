@@ -7,7 +7,8 @@ const doc = win['document']
 let _ns
 
 const argsSchema = [
-  ['auto-sell', false] // disable automatically selling the intel at the end of the loop
+  ['auto-sell', false], // disable automatically selling the intel at the end of the loop
+  ['n', 0], // number of times to run the loop (0 = infinite)
 ]
 let autoSell = false
 const failLimit = 3
@@ -25,15 +26,16 @@ export async function main (ns) {
   const options = _ns.flags(argsSchema)
   ns.print(`Running with options: ${JSON.stringify(options, (k, v) => k !== '_' ? v : undefined, 2)}`)
   autoSell = options['auto-sell']
+  const maxLoops = options['n']
   try {
-    await mainLoop()
+    await mainLoop(maxLoops)
   } catch (err) {
     log(_ns, err.toString())
     throw err
   }
 }
 
-async function mainLoop () {
+async function mainLoop (maxLoops = 0) {
   let canceled = false
   let consecutiveFails = 0
 
@@ -81,6 +83,7 @@ async function mainLoop () {
     btn.onclick = () => { canceled = true; fn() }
     btn.onclick._hooked = true
   }
+  let loopCount = 0
   /* eslint-disable-next-line no-unmodified-loop-condition */
   while (!canceled) {
     let fail = false
@@ -95,7 +98,7 @@ async function mainLoop () {
     await _ns.asleep(0)
     getEcorp().click()
     clickTrusted(queryFilter('button', 'Infil'))
-    log(_ns, 'Started loop')
+    log(_ns, `Started iteration #${loopCount+1}`)
     // Wrap the loop in a try/catch so that we can remove the controls if the loop fails
     addControls()
     try {
@@ -122,13 +125,20 @@ async function mainLoop () {
       if (autoSell) {
         // automatically click sell button
         const sellBtn = queryFilter('button', 'Sell')
-        log(_ns, `Selling for ${sellBtn?.innerText.split('\n').at(-1)}`)
-        sellBtn?.click()
+        if (sellBtn) {
+          log(_ns, `Selling for ${sellBtn.innerText.split('\n').at(-1)}`)
+          sellBtn.click()
+        }
       } else {
         // wait for the user to make a choice on selling intel
         while (queryFilter('h4', 'Infiltration successful!') !== undefined) {
           await _ns.asleep(1000)
         }
+      }
+      loopCount++
+      if (loopCount === maxLoops) {
+        log(_ns, `INFO: Reached max loop count of ${maxLoops}. Exiting loop.`)
+        break
       }
       await _ns.asleep(1000)
     }
