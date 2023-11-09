@@ -126,6 +126,7 @@ function autoSetTimeFactor () {
   if (levelElement === undefined) {
     if (setTimeFactor(1)) {
       logConsole('Infiltration not detected: removing injection')
+      purgeEventListenerCache()
     }
   } else {
     if (setTimeFactor(infiltrationTimeFactor)) {
@@ -192,19 +193,19 @@ export function wrapEventListeners () {
             handler[prop] = callback[prop]
           }
         }
-      }
 
-      // if (!this.eventListeners) {
-      //   this.eventListeners = {}
-      // }
-      // if (!this.eventListeners[type]) {
-      //   this.eventListeners[type] = []
-      // }
-      // this.eventListeners[type].push({
-      //   listener: callback,
-      //   useCapture: options,
-      //   wrapped: handler
-      // })
+        if (!this.eventListeners) {
+          this.eventListeners = {}
+        }
+        if (!this.eventListeners[type]) {
+          this.eventListeners[type] = []
+        }
+        this.eventListeners[type].push({
+          listener: callback,
+          useCapture: options,
+          wrapped: handler
+        })
+      }
 
       return this._addEventListener(
         type,
@@ -218,34 +219,46 @@ export function wrapEventListeners () {
     _doc._removeEventListener = _doc.removeEventListener
 
     _doc.removeEventListener = function (type, callback, options) {
+      if (type === 'keydown') {
 
-      // if (!this.eventListeners) {
-      //   this.eventListeners = {}
-      // }
-      // if (!this.eventListeners[type]) {
-      //   this.eventListeners[type] = []
-      // }
+        if (!this.eventListeners) {
+          this.eventListeners = {}
+        }
+        if (!this.eventListeners[type]) {
+          this.eventListeners[type] = []
+        }
 
-      // for (let i = 0; i < this.eventListeners[type].length; i++) {
-      //   if (
-      //     this.eventListeners[type][i].listener === callback &&
-      //     this.eventListeners[type][i].useCapture === options
-      //   ) {
-      //     if (this.eventListeners[type][i].wrapped) {
-      //       callback = this.eventListeners[type][i].wrapped
-      //     }
+        for (let i = 0; i < this.eventListeners[type].length; i++) {
+          if (
+            this.eventListeners[type][i].listener === callback &&
+            this.eventListeners[type][i].useCapture === options
+          ) {
+            if (this.eventListeners[type][i].wrapped) {
+              callback = this.eventListeners[type][i].wrapped
+            }
 
-      //     this.eventListeners[type].splice(i, 1)
-      //     break
-      //   }
-      // }
+            this.eventListeners[type].splice(i, 1)
+            break
+          }
+        }
 
-      // if (this.eventListeners[type].length === 0) {
-      //   delete this.eventListeners[type]
-      // }
+        if (this.eventListeners[type].length === 0) {
+          delete this.eventListeners[type]
+        }
+      }
 
       return this._removeEventListener(type, callback, options)
     }
+  }
+}
+
+export function purgeEventListenerCache () {
+  if (_doc.eventListeners['keydown']) {
+    console.log(`Purging ${_doc.eventListeners['keydown'].length} event listeners`)
+    _doc.eventListeners['keydown'].forEach(listener => {
+      _doc.removeEventListener('keydown', listener.listener, listener.useCapture)
+    })
+    _doc.eventListeners['keydown'] = [] // hopefully the GC takes care of the rest
   }
 }
 
@@ -397,9 +410,9 @@ class InfiltrationService {
       }
     })
     // trace code to print the known coords
-    console.log('Mine coords: ' + JSON.stringify(mineCoords))
+    // console.log('Mine coords: ' + JSON.stringify(mineCoords))
     // print the number of mines
-    console.log(`Mines: ${mineCoords.length}`)
+    // console.log(`Mines: ${mineCoords.length}`)
     // print the solution string
     for (let y = 0; y < sizeY; y++) {
       const row = []
@@ -535,10 +548,10 @@ class InfiltrationService {
       const upArrowIsBest = globalThis.getComputedStyle(activeElement.nextSibling).color === globalThis.getComputedStyle(activeElement).color
       const currentWord = activeElement.nextSibling.nextSibling.innerText
       if (positive.includes(currentWord)) {
-        console.log(`!!! ${currentWord} !!!`)
+        // console.log(`!!! ${currentWord} !!!`)
         await self.sendKeyString(' ')
       } else if (lastWord !== currentWord) {
-        console.log(currentWord)
+        // console.log(currentWord)
         await self.sendKeyString(upArrowIsBest ? 'w' : 's')
         lastWord = currentWord
       }
@@ -605,7 +618,7 @@ class InfiltrationService {
     await self.cyberpunk()
     // Mark all the mines!
     await self.mines()
-    // Slash when his guard is down!
+    // Attack when his guard is down!
     await self.slash()
     // Close the brackets
     await self.brackets()
@@ -834,14 +847,21 @@ export async function simulateAugInstall(ns, player, upgrades, bnMults, wks) {
 
   // Define the stats that can be specified by 'all' key
   const stats = ['strength', 'strength_exp', 'defense', 'defense_exp', 'dexterity', 'dexterity_exp', 'agility', 'agility_exp', 'charisma', 'charisma_exp'];
-
+  stats['strength'] ??= stats['str']
+  stats['strength_exp'] ??= stats['str_exp']
+  stats['defense'] ??= stats['def']
+  stats['defense_exp'] ??= stats['def_exp']
+  stats['dexterity'] ??= stats['dex']
+  stats['dexterity_exp'] ??= stats['dex_exp']
+  stats['agility'] ??= stats['agi']
+  stats['agility_exp'] ??= stats['agi_exp']
   // Apply the upgrades
   for (const stat in simulatedPlayer.mults) {
     if (upgrades.hasOwnProperty(stat)) {
       // stat may be specified in x*y*z format, so multiply it all together before applying it
-      simulatedPlayer.mults[stat] *= upgrades[stat].split('*').reduce((a, b) => a * b)
+      simulatedPlayer.mults[stat] *= upgrades[stat].toString().split('*').reduce((a, b) => a * b)
     } else if (upgrades.hasOwnProperty('all') && stats.includes(stat)) {
-      simulatedPlayer.mults[stat] *= upgrades['all'].split('*').reduce((a, b) => a * b)
+      simulatedPlayer.mults[stat] *= upgrades['all'].toString().split('*').reduce((a, b) => a * b)
     }
   }
   log(ns, `Simulated player: ${JSON.stringify(simulatedPlayer.mults, null, 2)}`)
