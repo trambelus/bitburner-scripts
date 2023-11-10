@@ -3,12 +3,11 @@
  * This file uses a service paradigm, or a zero-RAM task running almost-invisibly via setInterval.
  * Information on running services is stored in the local file `services.txt`.
  * Running this file will launch the service (killing any previous instances), store its info, and quickly exit.
- * TODO: Add support for cycling infiltrations automatically
  * TODO: add support for time-stretched human assistance mode, maybe
- * TODO: separate out services logic into a `services.js` so more can be easily added (e.g. terminal monitor)
  */
 
 import { log, formatMoney, formatNumberShort, tryGetBitNodeMultipliers, getNsDataThroughFile } from './helpers'
+import { registerService, stopService } from './services'
 
 // delays for setTimeout and setInterval above this threshold are not modified
 // (helps prevent issues with hacking scripts)
@@ -350,6 +349,8 @@ class InfiltrationService {
     const titleSpan = buttonNode.parentNode.parentNode.firstChild.nextSibling
     const companyName = titleSpan.ariaLabel ? titleSpan.ariaLabel.slice(22, -1) : titleSpan.textContent
     const info = self.rewardInfo.find(c => c.name === companyName)
+    // this function may be called before the reward info is loaded, so just return if we don't have it yet
+    if (!info) return
     const rewardStr = `${formatMoney(info.moneyGain)}, ${formatNumberShort(info.repGain)} rep (${info.maxClearanceLevel})`
     buttonNode.insertAdjacentHTML('afterend', `<span class='rewardTooltip'>${rewardStr}</span>`)
   }
@@ -841,30 +842,72 @@ export function getAllRewards (ns, bnMults, player, wks = false, display = false
   return locations
 }
 
+function round(num, n) {
+  if (n === undefined) n = 0
+  if (num == 0) return 0
+  const d = Math.ceil(Math.log10(num < 0 ? -num : num))
+  const power = n - d
+  const magnitude = Math.pow(10, power)
+  const shifted = Math.round(num * magnitude)
+  return shifted / magnitude
+}
+
+function evaluateMultipliers(str) {
+  // given a string like '1.5*1.5*1.5' or '1.5^3' (equivalent), return the result
+  str = str.toString()
+  // if the string is invalid, return 1
+  try {
+    // first, expand the ^ notation into a series of multiplications
+    let powerReg = /([0-9.]+)\^([0-9.]+)/
+    let match
+    while ((match = powerReg.exec(str)) !== null) {
+      const base = Number(match[1])
+      const exponent = Number(match[2])
+      if (exponent !== Math.floor(exponent)) throw new Error('Exponent must be an integer')
+      const replacement = (base + '*').repeat(exponent).slice(0, -1)
+      str = str.replace(match[0], replacement)
+    }
+    // now evaluate the multiplications
+    return str.split('*').reduce((a, b) => a * b)
+  }
+  catch {
+    return 1
+  }
+}
+
 export async function simulateAugInstall(ns, player, upgrades, bnMults, wks) {
   // Create a copy of the player object to avoid modifying the original
   const simulatedPlayer = JSON.parse(JSON.stringify(player))
 
   // Define the stats that can be specified by 'all' key
   const stats = ['strength', 'strength_exp', 'defense', 'defense_exp', 'dexterity', 'dexterity_exp', 'agility', 'agility_exp', 'charisma', 'charisma_exp'];
-  stats['strength'] ??= stats['str']
-  stats['strength_exp'] ??= stats['str_exp']
-  stats['defense'] ??= stats['def']
-  stats['defense_exp'] ??= stats['def_exp']
-  stats['dexterity'] ??= stats['dex']
-  stats['dexterity_exp'] ??= stats['dex_exp']
-  stats['agility'] ??= stats['agi']
-  stats['agility_exp'] ??= stats['agi_exp']
+  upgrades['strength'] ??= upgrades['str']
+  upgrades['strength_exp'] ??= upgrades['str_exp']
+  upgrades['defense'] ??= upgrades['def']
+  upgrades['defense_exp'] ??= upgrades['def_exp']
+  upgrades['dexterity'] ??= upgrades['dex']
+  upgrades['dexterity_exp'] ??= upgrades['dex_exp']
+  upgrades['agility'] ??= upgrades['agi']
+  upgrades['agility_exp'] ??= upgrades['agi_exp']
   // Apply the upgrades
   for (const stat in simulatedPlayer.mults) {
-    if (upgrades.hasOwnProperty(stat)) {
+    let upgradeCalculated = 1
+    if (upgrades.hasOwnProperty(stat) && upgrades[stat] !== undefined) {
       // stat may be specified in x*y*z format, so multiply it all together before applying it
-      simulatedPlayer.mults[stat] *= upgrades[stat].toString().split('*').reduce((a, b) => a * b)
-    } else if (upgrades.hasOwnProperty('all') && stats.includes(stat)) {
-      simulatedPlayer.mults[stat] *= upgrades['all'].toString().split('*').reduce((a, b) => a * b)
+      upgradeCalculated = evaluateMultipliers(upgrades[stat])
+    }
+    // if 'all' is specified, multiply that in too
+    if (upgrades.hasOwnProperty('all') && stats.includes(stat)) {
+      upgradeCalculated *= evaluateMultipliers(upgrades['all'])
+    }
+    if (upgradeCalculated !== 1) {
+      simulatedPlayer.mults[stat] *= upgradeCalculated
+      // Log the change
+      log(ns, `${stat}: ${round(player.mults[stat], 4)} -> ${round(simulatedPlayer.mults[stat], 4)} ` +
+              `(+${round((simulatedPlayer.mults[stat] / player.mults[stat] - 1) * 100, 4)}%)`)
     }
   }
-  log(ns, `Simulated player: ${JSON.stringify(simulatedPlayer.mults, null, 2)}`)
+  // log(ns, `Simulated player: ${JSON.stringify(simulatedPlayer.mults, null, 2)}`)
 
   // Calculate the rewards for the original player
   const originalRewards = getAllRewards(ns, bnMults, player, wks, false)
@@ -900,50 +943,12 @@ async function hasSoaAug (ns) {
   return false
 }
 
-// service stuff
-
-export async function stopPrevService (ns, serviceName, writeback = true) {
-  const contents = ns.read('services.txt')
-  if (contents === '') {
-    return []
-  }
-  try {
-    const services = JSON.parse(contents)
-    const serviceIndex = services.findIndex(s => s.name === serviceName)
-    if (serviceIndex === -1) {
-      return services
-    }
-    // remove from service array, clear interval, write back
-    const intervalId = services.splice(serviceIndex, 1)[0].intervalId
-    _win.clearInterval(intervalId)
-    log(ns, `Cleared previous interval with id ${intervalId}`, false, 'info')
-    if (writeback) {
-      await ns.write('services.txt', JSON.stringify(services, null, 2), 'w')
-    }
-    return services
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      log(ns, `WARNING: service listing for ${serviceName} is invalid: ${contents}`)
-    } else throw err
-  }
-}
-
-export async function registerService (ns, serviceName, intervalId, params = {}) {
-  // kill previous service with this name, if any
-  const services = await stopPrevService(ns, serviceName, false)
-  const newService = { name: serviceName, started: Date.now(), intervalId, params }
-  services.push(newService)
-  // write info to services file
-  await ns.write('services.txt', JSON.stringify(services, null, 2), 'w')
-  log(ns, `Registered new service ${serviceName} with id ${intervalId}`)
-}
-
 export async function main (ns) {
   ns.disableLog('ALL')
   const options = ns.flags(argsSchema)
   if (options.stop) {
     setTimeFactor(1)
-    await stopPrevService(ns, serviceName)
+    await stopService(ns, serviceName)
     return
   }
   // get BN multipliers first to feed reward info to infiltration service
