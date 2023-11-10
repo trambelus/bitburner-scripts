@@ -4,13 +4,17 @@
 
 import { log } from 'helpers.js'
 
-const _win = [].map.constructor('return this')()
+export const _win = [].map.constructor('return this')()
+
+const reloadDelay = 3e3
 
 export async function stopService (ns, serviceName, writeback = true) {
   const contents = ns.read('services.txt')
+
   if (contents === '') {
     return []
   }
+
   try {
     const services = JSON.parse(contents)
     const serviceIndex = services.findIndex(s => s.name === serviceName)
@@ -19,18 +23,22 @@ export async function stopService (ns, serviceName, writeback = true) {
     }
     // remove from service array, clear interval, write back
     const intervalId = services.splice(serviceIndex, 1)[0].intervalId
+    if (intervalId === -1) return services // not a real service, just a boot log
     _win.clearInterval(intervalId)
     log(ns, `Cleared previous interval with id ${intervalId}`, false, 'info')
+    
     if (writeback) {
       await ns.write('services.txt', JSON.stringify(services, null, 2), 'w')
     }
+
     return services
-  } catch (err) {
+  }
+  catch (err) {
     if (err instanceof SyntaxError) {
       log(ns, `WARNING: service listing for ${serviceName} is invalid: ${contents}`)
     } else throw err
   }
-  }
+}
   
 export async function registerService (ns, serviceName, intervalId, params = {}) {
   // kill previous service with this name, if any
@@ -99,14 +107,28 @@ export async function main (ns) {
     return
   }
 
+  if (ns.args[0] === 'reload') {
+    // reload the game after a delay
+    log(ns, `INFO: Reloading in ${reloadDelay} ms...`, true, 'info')
+    await ns.sleep(reloadDelay)
+    _win.location.reload()
+    return
+  }
+
   if (ns.args.length === 0 || ns.args[0] === 'help') {
     // print help
     log(ns, 'INFO: Usage:'
      + '\n  services.js boot'
+     + '\n    - clears services and logs the time of the reload (run this on autoexec)'
      + '\n  services.js list'
+     + '\n    - lists all running services'
      + '\n  services.js stop <service>'
+     + '\n    - stops the specified service'
      + '\n  services.js stopall'
-     , true, 'info')
+     + '\n    - stops all running services'
+     + '\n  services.js reload'
+     + '\n    - reloads the game window'
+     , true)
     return
   }
 

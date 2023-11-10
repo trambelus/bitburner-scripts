@@ -1,6 +1,10 @@
 // skip.js
+// Simulate a time skip by editing the player's save data.
 
-const reloadDelay = 1500
+// not a necessary import, but it's a way to make this script crash if services.js is missing
+import { _win } from "./services"
+
+const thisScript = 'skip.js' // hardcoded to save ram
 
 export async function editPlayerData (callback) {
   // get save data
@@ -70,13 +74,21 @@ export function parseTime (timeStr) {
 
 /** @param {import(".").NS} ns */
 export async function main (ns) {
+  if (ns.args.length === 0) {
+    ns.tprint(`Usage: ${thisScript} <time>`)
+    ns.tprint(`Example: ${thisScript} 1h 30m 15s`)
+    return
+  }
   const skipAmount = parseTime(ns.args.join(' '))
-  ns.print(`Skipping ${skipAmount} ms...`)
+  ns.tprint(`Skipping ${skipAmount} ms...`)
   await editPlayerData(playerData => {
     playerData.lastSave -= skipAmount
     playerData.lastUpdate -= skipAmount
   })
-  // delay to avoid reloading/exiting before save edit is complete
-  setTimeout(() => { getWindow().location.reload() }, reloadDelay)
-  await ns.sleep(10e3 + reloadDelay)
+  // Spawn a new process to reload the window.
+  // This is necessary because it needs to be executed with the 'temporary' flag,
+  // which can't be done from the terminal (afaik).
+  // If it's not set, the reloading script may resume execution immediately after the reload,
+  // trapping us in a hellish infinite loop of ever-increasing time skips.
+  ns.exec('services.js', 'home', { temporary: true }, 'reload')
 }
