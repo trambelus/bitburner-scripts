@@ -2,7 +2,7 @@
 // This is sort of a plumbing file, it's not really meant to be run directly
 // except as an autoexec to clear existing services immediately after a reload.
 
-import { log } from 'helpers.js'
+import { log, formatDuration } from 'helpers.js'
 
 export const _win = [].map.constructor('return this')()
 
@@ -55,12 +55,30 @@ export async function main (ns) {
   ns.disableLog('ALL')
 
   if (ns.args[0] === 'boot') {
+    // Read last boot time from services file, if available
+    const contents = ns.read('services.txt')
+    let timeSinceLastBoot = 'an unknown time'
+    if (contents !== '') {
+      try {
+        const services = JSON.parse(contents)
+        const bootService = services.find(s => s.name === 'game')
+        if (bootService) {
+          timeSinceLastBoot = formatDuration(Date.now() - bootService.started)
+        }
+      }
+      catch (err) {
+        if (err instanceof SyntaxError) {
+          log(ns, `WARNING: could not parse services.txt: ${contents}`, true)
+        } else throw err
+      }
+    }
     // clear services file
     // using write instead of rm because of ram cost (why does rm still cost ram?)
     await ns.write('services.txt', '', 'w')
     // register a dummy service to log the time of the reload
     const newService = await registerService(ns, 'game', -1)
-    log(ns, `INFO: Reloaded at ${new Date(newService.started).toISOString()}`, true)
+    log(ns, `INFO: Game loaded at ${new Date(newService.started).toISOString()}`, true)
+    log(ns, `INFO: Last loaded ${timeSinceLastBoot} ago`, true)
     return
   }
 
