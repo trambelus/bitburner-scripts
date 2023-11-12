@@ -263,13 +263,29 @@ async function checkIfBnIsComplete(ns, player) {
         }
     }
     if (options['disable-auto-destroy-bn']) {
-        log(ns, `--disable-auto-destroy-bn is set, you can manually exit the bitnode when ready.`, true);
+        log(ns, `--disable-auto-destroy-bn is set; you can manually exit the bitnode when ready.`, true);
         return bnCompletionSuppressed = true;
     }
     if (!(4 in dictOwnedSourceFiles)) {
         log(ns, `You do not own SF4, so you must manually exit the bitnode (` +
             `${player.skills.hacking >= wdHack ? "by hacking W0r1dD43m0n" : "on the bladeburner BlackOps tab"}).`, true);
         return bnCompletionSuppressed = true;
+    }
+
+    // Can't destroy the bitnode until we have all the port-crackers
+    const hackPrograms = ["BruteSSH.exe", "FTPCrack.exe", "relaySMTP.exe", "HTTPWorm.exe", "SQLInject.exe"];
+    for (const prog of hackPrograms) {
+        const owned = await getNsDataThroughFile(ns, `ns.fileExists(ns.args[0], "home")`, null, [prog]);
+        if (!owned) {
+            log(ns, `Port-cracker "${prog}" is required to destroy the bitnode. Waiting for program manager to purchase it...`, true);
+            // Launch program-manager in continuous mode, so it'll only exit once all programs are purchased
+            let pid = launchScriptHelper(ns, 'Tasks/program-manager.js', ['-c']);
+            if (pid) await waitForProcessToComplete(ns, pid);
+            else {
+                log(ns, `WARNING: Failed to launch program-manager.js!`, true, 'warning');
+                return;
+            }
+        }
     }
 
     // Clean out our temp folder and flags so we don't have any stale data when the next BN starts.
