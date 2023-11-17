@@ -1,6 +1,6 @@
 import {
   instanceCount, getConfiguration, getNsDataThroughFile, getFilePath, getActiveSourceFiles, tryGetBitNodeMultipliers,
-  formatDuration, formatMoney, formatNumberShort, disableLogs, log
+  formatDuration, formatMoney, formatNumberShort, disableLogs, log, isInfiltrationActive
 } from './helpers.js'
 import GymHandler from './gym.js'
 
@@ -478,7 +478,7 @@ async function earnFactionInvite (ns, factionName) {
       }
   }
   if (doCrime && options['no-crime'])
-      return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);
+      return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime)`);
   if (doCrime)
       workedForInvite = await crimeForKillsKarmaStats(ns, requiredKillsByFaction[factionName] || 0, requiredKarmaByFaction[factionName] || 0, requiredCombatByFaction[factionName] || 0);
 
@@ -618,6 +618,7 @@ export async function crimeForKillsKarmaStats(ns, reqKills, reqKarma, reqStats, 
                 ns.tail(); // Force a tail window open to help the user kill this script if they accidentally closed the tail window and don't want to keep doing crime
             }
             let focusArg = shouldFocus === undefined ? true : shouldFocus; // Only undefined if running as imported function
+            focusArg &&= !(await isInfiltrationActive(ns)); // Don't focus if we're in the middle of an infiltration
             crimeTime = await getNsDataThroughFile(ns, 'ns.singularity.commitCrime(ns.args[0], ns.args[1])', null, [crime, focusArg])
             if (shouldFocus) ns.tail(); // Force a tail window open when auto-criming with focus so that the user can more easily kill this script
         }
@@ -661,6 +662,7 @@ async function study(ns, focus, course, university = null) {
             return;
         }
     }
+    focus &&= !(await isInfiltrationActive(ns)); // Don't focus if we're in the middle of an infiltration
     if (await getNsDataThroughFile(ns, `ns.singularity.universityCourse(ns.args[0], ns.args[1], ns.args[2])`, null, [university, course, focus])) {
         log(ns, `Started studying '${course}' at '${university}'`, false, 'success');
         return true;
@@ -917,6 +919,7 @@ async function stop(ns) { return await getNsDataThroughFile(ns, `ns.singularity.
  * @param {NS} ns */
 async function startWorkForFaction(ns, factionName, work, focus) {
     //log(ns, `INFO: startWorkForFaction(${factionName}, ${work}, ${focus})`);
+    focus &&= !(await isInfiltrationActive(ns)); // Don't focus if we're in the middle of an infiltration
     return await getNsDataThroughFile(ns, `ns.singularity.workForFaction(ns.args[0], ns.args[1], ns.args[2])`, null, [factionName, work, focus])
 }
 
@@ -1124,7 +1127,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
                 isWorking = false;
                 ns.tail(); // Force a tail window open to help the user kill this script if they accidentally closed the tail window and don't want to keep working
             }
-            if (await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, null, [companyName, shouldFocus])) {
+            if (await getNsDataThroughFile(ns, `ns.singularity.workForCompany(ns.args[0], ns.args[1])`, null, [companyName, shouldFocus && !(await isInfiltrationActive(ns))])) {
                 isWorking = true;
                 if (shouldFocus) ns.tail(); // Keep a tail window open if we're stealing focus
             } else {

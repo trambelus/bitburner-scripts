@@ -2,9 +2,14 @@
 // This is sort of a plumbing file, it's not really meant to be run directly
 // except as an autoexec to clear existing services immediately after a reload.
 
+
 import { log, formatDuration } from 'helpers.js'
 
 export const _win = [].map.constructor('return this')()
+
+// This is only here to avoid a circular dependency with infiltrate-service.js and infiltrate.js
+// TODO: find a better way to do this
+export const loopCountFile = '/Temp/infiltrate-loop-count.txt'
 
 const reloadDelay = 3e3
 
@@ -79,6 +84,10 @@ export async function main (ns) {
     const newService = await registerService(ns, 'game', -1)
     log(ns, `INFO: Game loaded at ${new Date(newService.started).toISOString()}`, true)
     log(ns, `INFO: Last loaded ${timeSinceLastBoot} ago`, true)
+
+    // clear other files that need to be cleared
+    await ns.write(loopCountFile, '', 'w')
+
     return
   }
 

@@ -590,3 +590,31 @@ export function unEscapeArrayArgs(args) {
     const escapeChars = ['"', "'", "`"];
     return args.map(arg => escapeChars.some(c => arg.startsWith(c) && arg.endsWith(c)) ? arg.slice(1, -1) : arg);
 }
+
+export const infiltrationMarkerFile = '/Temp/infiltration-loop-active.txt';
+
+export async function isInfiltrationActive(ns) {
+    const previous = await ns.read(infiltrationMarkerFile)
+    // no idea what to do if it's corrupted, so just assume it's active if it exists
+    return previous !== ''
+}
+
+export async function setInfiltrationActive(ns) {
+    // Drop a file in the home directory to indicate that an infiltration loop is running.
+    // Other scripts should avoid pulling focus while this file exists,
+    // but starting work without pulling focus is fine.
+    await ns.write(infiltrationMarkerFile, Date.now(), 'w')
+}
+
+export async function setInfiltrationInactive(ns, quiet=false) {
+    // ns.fileExists costs RAM, so we'll just try to read the file and check for errors
+    const previous = await ns.read(infiltrationMarkerFile)
+    if (previous === '' || Number(previous) === NaN) {
+        log(ns, 'WARNING: Infiltration loop file could not be read.', false, 'warning')
+        // try removing it anyway, in case it's empty or corrupted
+    } else {
+        log(ns, `INFO: Infiltration loop ended after ${formatDuration(Math.floor(Date.now() - Number(previous)))}.`, !quiet)
+    }
+    await getNsDataThroughFile(ns, 'ns.rm(ns.args[0])', null, [infiltrationMarkerFile])
+    // result doesn't really matter, since the file might not have existed to begin with
+}

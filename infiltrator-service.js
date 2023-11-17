@@ -1,4 +1,4 @@
-/* infiltrator.js
+/* infiltrate-service.js
  * Fully-automated infiltrator
  * This file uses a service paradigm, or a zero-RAM task running almost-invisibly via setInterval.
  * Information on running services is stored in the local file `services.txt`.
@@ -20,6 +20,9 @@ const tickInterval = 50
 
 // unique name to prevent overlaps
 const serviceName = 'infiltrator'
+
+// file for storing infiltration rewards
+export const rewardsFile = '/Temp/infiltratorRewards.txt'
 
 // boost given by WKSharmonizer aug
 const WKSharmonizerMult = 1.5
@@ -46,7 +49,7 @@ export function autocomplete (data) {
 let lastLog
 function logConsole (str) {
   if (str === lastLog) return
-  console.log('infiltrator.js: ' + str)
+  console.log('infiltrate-service.js: ' + str)
   lastLog = str
 }
 
@@ -364,24 +367,30 @@ class InfiltrationService {
   }
 
   async cyberpunk () {
-    let targetElement = queryFilter('h5', 'Targets:')
-    if (!targetElement) return
-    logConsole('Game active: Cyberpunk2077 game')
-    const targetValues = targetElement.innerText.split('Targets: ')[1].trim().split(/\s+/)
-    const grid = queryFilter('p', /^[0-9a-f]{2}$/, targetElement.parentNode).parentNode
-    const size = ~~(grid.childElementCount ** 0.5)
-    const routePoints = []
-    // get coords of each target
-    for (const target of targetValues) {
-      const node = [...grid.children].filter(el => el.innerText.trim() === target)[0]
-      routePoints.push([getNodeIndex(node) % size, ~~(getNodeIndex(node) / size)])
+    try {
+      await sleep(10) // possible fix for a failure to detect the game
+      let targetElement = queryFilter('h5', 'Targets:')
+      if (!targetElement) return
+      logConsole('Game active: Cyberpunk2077 game')
+      const targetValues = targetElement.innerText.split('Targets: ')[1].trim().split(/\s+/)
+      const grid = queryFilter('p', /^[0-9a-f]{2}$/, targetElement.parentNode).parentNode
+      const size = ~~(grid.childElementCount ** 0.5)
+      const routePoints = []
+      // get coords of each target
+      for (const target of targetValues) {
+        const node = [...grid.children].filter(el => el.innerText.trim() === target)[0]
+        routePoints.push([getNodeIndex(node) % size, ~~(getNodeIndex(node) / size)])
+      }
+      const pathStr = getPathSequential(size, size, routePoints).join(' ') + ' '
+      logConsole(`Sending path: '${pathStr}'`)
+      await this.sendKeyString(pathStr)
+      while (targetElement !== undefined) {
+        await sleep(50)
+        targetElement = queryFilter('h5', 'Targets:')
+      }
     }
-    const pathStr = getPathSequential(size, size, routePoints).join(' ') + ' '
-    logConsole(`Sending path: '${pathStr}'`)
-    await this.sendKeyString(pathStr)
-    while (targetElement !== undefined) {
-      await sleep(50)
-      targetElement = queryFilter('h5', 'Targets:')
+    catch (e) {
+      logConsole(`ERROR: ${e}`)
     }
   }
 
@@ -609,30 +618,38 @@ class InfiltrationService {
     // prevent overlapping execution
     if (!self.tickComplete) return
     self.tickComplete = false
-    // Add visual indicator to infiltration screen
-    self.infilButtonUpdate()
-    // Press start if it's visible
-    pressStart()
-    // Adjust time speed if we're infiltrating
-    autoSetTimeFactor()
-    // Match the symbols!
-    await self.cyberpunk()
-    // Mark all the mines!
-    await self.mines()
-    // Attack when his guard is down!
-    await self.slash()
-    // Close the brackets
-    await self.brackets()
-    // Enter the code
-    await self.cheatCode()
-    // Type it backward
-    await self.backwardGame()
-    // Say something nice about the guard
-    await self.bribeGame()
-    // Cut the wires
-    await self.wireCuttingGame()
-    // allow this function to be executed again
-    self.tickComplete = true
+    try {
+      // Add visual indicator to infiltration screen
+      self.infilButtonUpdate()
+      // Press start if it's visible
+      pressStart()
+      // Adjust time speed if we're infiltrating
+      autoSetTimeFactor()
+      // Match the symbols!
+      await self.cyberpunk()
+      // Mark all the mines!
+      await self.mines()
+      // Attack when his guard is down!
+      await self.slash()
+      // Close the brackets
+      await self.brackets()
+      // Enter the code
+      await self.cheatCode()
+      // Type it backward
+      await self.backwardGame()
+      // Say something nice about the guard
+      await self.bribeGame()
+      // Cut the wires
+      await self.wireCuttingGame()
+      // allow this function to be executed again
+      self.tickComplete = true
+    }
+    catch (e) {
+      // This is basically ON ERROR RESUME NEXT, but it's important that the infiltrator can resume
+      // because it's difficult to tell when it's crashed and needs to be restarted.
+      logConsole(`ERROR: ${e}`)
+      self.tickComplete = true
+    }
   }
 
   start () {
@@ -830,7 +847,7 @@ export function getAllRewards (ns, bnMults, player, wks = false, display = false
     location.moneyScore = location.moneyGain / location.maxClearanceLevel
   }
   // sort and display
-  locations.sort((a, b) => a.repScore - b.repScore)
+  locations.sort((a, b) => a.repScore - b.repScore) // worst to best
   if (display) {
     for (const location of locations) {
       log(ns, location.name, true)
@@ -970,6 +987,9 @@ export async function main (ns) {
     }
     return
   }
+
+
+  // set time factor
   infiltrationTimeFactor = options.timeFactor
   keyDelay = options.keyDelay
   // ensure that we're running this on home, if necessary
@@ -978,10 +998,17 @@ export async function main (ns) {
     log(ns, `ERROR: script is running on ${host}, not on ${options.allowedHost} as required. Exiting.`, true)
     return
   }
-  log(ns, `Time factor: ${infiltrationTimeFactor}`, true)
-  log(ns, `Infiltration multipliers: ${bnMults?.InfiltrationRep}× rep, ${bnMults?.InfiltrationMoney}× money`, true)
-  log(ns, `WKS harmonizer aug: ${wks ? 'yes' : 'no'}`, true)
+
   const locations = getAllRewards(ns, bnMults, player, wks)
+  // Write the best reward to a file
+  const bestReward = locations[locations.length - 1]
+  await ns.write(rewardsFile, JSON.stringify(bestReward, ['name', 'moneyGain', 'repGain'], 2), 'w')
+
+  log(ns, `Time factor: ${infiltrationTimeFactor}`, true)
+  log(ns, `Infiltration multipliers: ${bnMults?.InfiltrationRep}× rep (${formatNumberShort(bestReward.repGain)}), ` +
+          `${bnMults?.InfiltrationMoney}× money (${formatMoney(bestReward.moneyGain)})`, true)
+  log(ns, `WKS harmonizer aug: ${wks ? 'yes' : 'no'}`, true)
+  
   // launch service and see if it connects
   const service = new InfiltrationService(ns, locations)
   const intervalId = service.start()
