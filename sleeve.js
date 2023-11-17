@@ -315,7 +315,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
  * @param {SleevePerson} sleeve */
 function shockRecoveryTask(sleeve, i, reason) {
     return [`recover from shock`, `ns.sleeve.setToShockRecovery(ns.args[0])`, [i],
-    /*   */ `recovering from shock (${sleeve.shock.toFixed(2)}%) beacause ${reason}...`];
+    /*   */ `recovering from shock (${sleeve.shock.toFixed(2)}%) because ${reason}...`];
 }
 
 /** Helper to prepare the crime task

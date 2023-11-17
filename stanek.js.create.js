@@ -103,7 +103,8 @@ const layouts = [ // NOTE: Width appears to be always the same as, or one more t
             { "id": 1, "x": 2, "y": 2, "rotation": 1 }, // Hacking Mult
             { "id": 5, "x": 3, "y": 3, "rotation": 1 }, // Hacking Speed
             { "id": 20, "x": 5, "y": 2, "rotation": 1 }, // Hacknet Production
-            { "id": 21, "x": 0, "y": 0, "rotation": 0 }, // Hacknet Cost Reduction
+            // { "id": 21, "x": 0, "y": 0, "rotation": 0 }, // Hacknet Cost Reduction
+            { "id": 7, "x": 0, "y": 0, "rotation": 1 }, // Grow power *new*
             { "id": 25, "x": 3, "y": 0, "rotation": 2 }, // Reputation
             { "id": 103, "x": 0, "y": 4, "rotation": 2 }, // Booster
             { "id": 104, "x": 2, "y": 0, "rotation": 1 } // Booster *new*
