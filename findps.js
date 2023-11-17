@@ -33,6 +33,10 @@ class ServerIterator {
   }
 }
 
+function plural(n, pluralForm='s') {
+  return n === 1 ? '' : pluralForm
+}
+
 function checkWild (pattern, str) {
   return new RegExp('^' + pattern.replace('*', '.*') + '$').test(str)
   // TODO: support actual regexes instead of just wildcard globbing?
@@ -61,20 +65,41 @@ export async function handleActions(ns, options) {
   const targetServer = options['s'] || ns.getHostname()
   if (options['l'] !== '') {
     const targetScript = options['l']
+    let hits = 0
+    const servers = new Set()
     for (let [server, proc] of iterate(ns, targetServer, targetScript)) {
       ns.tprint(`${server} pid=${proc.pid} t=${proc.threads} ${proc.filename} ${proc.args.join(' ')} ${proc.temporary ? '(temporary)' : ''}}`)
+      hits++
+    }
+    if (hits > 0) {
+      ns.tprint(`Total: ${hits} process${plural(hits, 'es')} on ${servers.size} server${plural(servers.size)}.`)
+    } else {
+      ns.tprint(`No matching processes found.`)
     }
   }
   if (options['k'] !== '') {
+    let hits = 0
+    const servers = new Set()
     const targetScript = options['k']
     for (let [server, proc] of iterate(ns, targetServer, targetScript)) {
       if (!ns.kill(proc.filename, server, ...proc.args)) {
         ns.print(`ERROR: Failed to kill ${proc.filename} on ${server}`)
+      } else {
+        ns.print(`SUCCESS: Killed ${proc.filename} on ${server} with pid ${proc.pid} and args "${proc.args.join(' ')}"`)
+        hits++
+        servers.add(server)
       }
+    }
+    if (hits > 0) {
+      ns.tprint(`Killed ${hits} process${plural(hits, 'es')} on ${servers.size} server${plural(servers.size)}.`)
+    } else {
+      ns.tprint(`No matching processes found.`)
     }
   }
   if (options['r'] !== '') {
     const targetScript = options['r']
+    let hits = 0
+    const servers = new Set()
     for (let [server, proc] of iterate(ns, targetServer, targetScript)) {
       if (!ns.kill(proc.filename, server, ...proc.args)) {
         ns.print(`ERROR: Failed to kill ${proc.filename} on ${server}`)
@@ -86,14 +111,26 @@ export async function handleActions(ns, options) {
         return
       }
       ns.print(`SUCCESS: Restarted ${proc.filename} on ${server} with pid ${pid} and args "${proc.args.join(' ')}"`)
+      hits++
+      servers.add(server)
+    }
+    if (hits > 0) {
+      ns.tprint(`Restarted ${hits} process${plural(hits, 'es')} on ${servers.size} server${plural(servers.size)}.`)
+    } else {
+      ns.tprint(`No matching processes found.`)
     }
   }
   if (options['f'] !== '') {
     const targetScript = options['f']
+    let hits = 0
     for (let [server, proc] of iterate(ns, targetServer, targetScript)) {
       ns.tail(proc.filename, server, ...proc.args)
       // no return value, so might as well assume it worked
       ns.print(`Attempted to tail ${proc.filename} on ${server} with args "${proc.args.join(' ')}"`)
+      hits++
+    }
+    if (hits > 0) {
+      ns.tprint(`Opened ${hits} tail window${plural(hits)}.`)
     }
   }
 }

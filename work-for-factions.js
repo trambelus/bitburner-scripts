@@ -17,7 +17,7 @@ const argsSchema = [
   ['training-stat-per-multi-threshold', 100], // Heuristic: Estimate that we can train this many levels for every mult / exp_mult we have in a reasonable amount of time.
   ['no-coding-contracts', false], // Disable purchasing coding contracts for reputation
   ['no-crime-training', true], // Set to true to only commit crimes for karma and kills, not to train combat stats
-  ['no-crime', false], // Disable doing crimes at all. (Also disabled with --no-focus)
+  ['no-crime', false], // Disable doing crimes at all.
   ['crime-focus', false], // Useful in crime-focused BNs when you want to focus on crime related factions
   ['fast-crimes-only', false], // Assasination and Heist are so slow, I can see people wanting to disable them just so they can interrupt at will.
   ['invites-only', false], // Just work to get invites, don't work for augmentations / faction rep

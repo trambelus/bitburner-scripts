@@ -428,6 +428,7 @@ async function checkOnRunningScripts(ns, player) {
     const workForFactionsArgs = [
         "--fast-crimes-only", // Essentially means we do mug until we can do homicide, then stick to homicide
         "--get-invited-to-every-faction", // Join factions even we have all their augs. Good for having NeuroFlux providers
+        "--no-focus", // focus-pulling disrupts infiltrations more than it benefits the early game
     ];
   
     if (options['no-crime']) workForFactionsArgs[0] = "--no-crime"; // Replace the first arg, because it would conflict with --no-crime

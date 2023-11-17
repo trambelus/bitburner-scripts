@@ -7,7 +7,7 @@ import { log, formatDuration } from 'helpers.js'
 
 export const _win = [].map.constructor('return this')()
 
-// This is only here to avoid a circular dependency with infiltrate-service.js and infiltrate.js
+// This is only here to avoid a circular dependency with infiltrator-service.js and infiltrate.js
 // TODO: find a better way to do this
 export const loopCountFile = '/Temp/infiltrate-loop-count.txt'
 

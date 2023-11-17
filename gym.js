@@ -11,6 +11,7 @@ const argsSchema = [
   ['agility', 0], // agility score target
   ['stats', 0], // shorthand to override all of the above if higher than them
   ['period', '10s'], // time spent on each before cycling to the next
+  ['no-halt', false], // continue last training action after script is stopped
   ['gym', 'Powerhouse Gym'] // gym to train at. not sure why you would ever change this.
 ]
 
@@ -48,12 +49,12 @@ export function queryFilter (query, filter) {
 }
 
 async function safeSleep (ms) {
-  // sleep function that's not affected by time shenanigans (e.g. infiltrator.js)
+  // sleep function that's not affected by time shenanigans (e.g. infiltrator)
   return new Promise(resolve => (win._setTimeout ?? win.setTimeout)(resolve, ms))
 }
 
 async function safeInterval (fn, ms) {
-  // interval function that's not affected by time shenanigans (e.g. infiltrator.js)
+  // interval function that's not affected by time shenanigans (e.g. infiltrator)
   const interval = win._setInterval ?? win.setInterval
   return interval(fn, ms)
 }
@@ -167,14 +168,23 @@ export default class GymHandler {
     }
   }
 
-  async trainContinuous (strTarget = this.target, defTarget = this.target, dexTarget = this.target, agiTarget = this.target, period = this.period, gym = this.gym) {
+  async trainContinuous (strTarget = this.target, defTarget = this.target, dexTarget = this.target, agiTarget = this.target, period = this.period, gym = this.gym, halt = false ) {
     let done = false
     while (!done) {
       done = await this.trainOneRound(strTarget, defTarget, dexTarget, agiTarget, period, gym)
       await this.ns.asleep(0)
     }
+    if (halt) {
+      // Halting is mainly an option so other automation scripts can see currentWork == null and step in to do their thing
+      // Otherwise, there's no harm in letting the training continue for further gains
+      const stopResult = await getNsDataThroughFile(this.ns, 'ns.singularity.stopAction()', '/Temp/stop-action.txt')
+      if (stopResult) {
+        log(this.ns, 'Successfully stopped training.', false)
+      } else {
+        log(this.ns, 'WARN: could not stop training. Did you already stop it manually?', false)
+      }
+    }
   }
-  
 }
 
 /** @param {NS} ns */
@@ -187,5 +197,5 @@ export async function main (ns) {
   if (options.stats > options.dexterity) options.dexterity = options.stats
   if (options.stats > options.agility) options.agility = options.stats
   const handler = new GymHandler(ns, options.stats, period, options.gym)
-  await handler.trainContinuous(options.strength, options.defense, options.dexterity, options.agility, period, options.gym)
+  await handler.trainContinuous(options.strength, options.defense, options.dexterity, options.agility, period, options.gym, !options['no-halt'])
 }
