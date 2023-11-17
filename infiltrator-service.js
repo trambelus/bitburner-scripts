@@ -1,4 +1,4 @@
-/* infiltrate-service.js
+/* infiltrator-service.js
  * Fully-automated infiltrator
  * This file uses a service paradigm, or a zero-RAM task running almost-invisibly via setInterval.
  * Information on running services is stored in the local file `services.txt`.
@@ -49,13 +49,8 @@ export function autocomplete (data) {
 let lastLog
 function logConsole (str) {
   if (str === lastLog) return
-  console.log('infiltrate-service.js: ' + str)
+  console.log('infiltrator-service.js: ' + str)
   lastLog = str
-}
-
-// straight replacement for ns.asleep
-function sleep (time) {
-  return new Promise(resolve => setTimeout(() => resolve(true), time))
 }
 
 // shorthand function for finding an element by querySelector and filtering by text
@@ -83,6 +78,11 @@ function addCss () {
   </style>`
   _doc.getElementById('infilCss')?.remove()
   _doc.head.insertAdjacentHTML('beforeend', css)
+}
+
+async function sleep (ms) {
+  // sleep function that's not affected by time shenanigans (e.g. infiltrator)
+  return new Promise(resolve => (_setTimeout ?? setTimeout)(resolve, ms))
 }
 
 // compress/stretch setInterval and setTimeout, to make infiltrations easier
@@ -367,30 +367,25 @@ class InfiltrationService {
   }
 
   async cyberpunk () {
-    try {
-      await sleep(10) // possible fix for a failure to detect the game
-      let targetElement = queryFilter('h5', 'Targets:')
-      if (!targetElement) return
-      logConsole('Game active: Cyberpunk2077 game')
-      const targetValues = targetElement.innerText.split('Targets: ')[1].trim().split(/\s+/)
-      const grid = queryFilter('p', /^[0-9a-f]{2}$/, targetElement.parentNode).parentNode
-      const size = ~~(grid.childElementCount ** 0.5)
-      const routePoints = []
-      // get coords of each target
-      for (const target of targetValues) {
-        const node = [...grid.children].filter(el => el.innerText.trim() === target)[0]
-        routePoints.push([getNodeIndex(node) % size, ~~(getNodeIndex(node) / size)])
-      }
-      const pathStr = getPathSequential(size, size, routePoints).join(' ') + ' '
-      logConsole(`Sending path: '${pathStr}'`)
-      await this.sendKeyString(pathStr)
-      while (targetElement !== undefined) {
-        await sleep(50)
-        targetElement = queryFilter('h5', 'Targets:')
-      }
+    await sleep(10) // possible fix for a failure to detect the game
+    let targetElement = queryFilter('h5', 'Targets:')
+    if (!targetElement) return
+    logConsole('Game active: Cyberpunk2077 game')
+    const targetValues = targetElement.innerText.split('Targets: ')[1].trim().split(/\s+/)
+    const grid = queryFilter('p', /^[0-9A-F]{2}$/, targetElement.parentNode).parentNode
+    const size = ~~(grid.childElementCount ** 0.5)
+    const routePoints = []
+    // get coords of each target
+    for (const target of targetValues) {
+      const node = [...grid.children].filter(el => el.innerText.trim() === target)[0]
+      routePoints.push([getNodeIndex(node) % size, ~~(getNodeIndex(node) / size)])
     }
-    catch (e) {
-      logConsole(`ERROR: ${e}`)
+    const pathStr = getPathSequential(size, size, routePoints).join(' ') + ' '
+    logConsole(`Sending path: '${pathStr}'`)
+    await this.sendKeyString(pathStr)
+    while (targetElement !== undefined) {
+      await sleep(50)
+      targetElement = queryFilter('h5', 'Targets:')
     }
   }
 

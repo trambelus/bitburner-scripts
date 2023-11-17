@@ -9,9 +9,14 @@
 // Author: Trambelus
 
 // TODO: investigate slowdown over repeated runs (maybe due to memory leak?)
+// TODO: support 'all' or '*' as a target to boost rep with all factions
+// TODO: script does not always detect when focus has been pulled away and the infiltration has been canceled
+// TODO: investigate circumstances where multiple loop controls are added to the page (might be fixed by the above)
+// TODO: make sure these recent changes don't tank RAM usage before BN4 is complete (should be fine, but double-check)
+// TODO: choose targets other than ECorp if required rep is lower, or if ECorp is not available
 
 import { log, getNsDataThroughFile, formatMoney, formatNumberShort,
-         setInfiltrationActive, setInfiltrationInactive } from './helpers'
+         setInfiltrationActive, setInfiltrationInactive, parseShortNumber } from './helpers'
 import { rewardsFile } from './infiltrator-service'
 import { loopCountFile } from './services'
 
@@ -23,14 +28,16 @@ let _ns
 
 const argsSchema = [
   ['auto-sell', false], // automatically sell the intel at the end of the loop (in manual mode)
-  ['reload-interval', 50], // reload the page every N loops (0 = never)
+  ['reload-interval', 25], // reload the page every N loops (0 = never)
+  // best to set this such that the total time between refreshes is more than the default autopilot reset time (5 minutes)
+  // assuming optimistically that each loop takes 30 seconds, this value can go as low as 10
 ]
 // globals so they can interact with controls
 let autoSell = false
 let targetLabelText = 'Manual infiltration mode'
 let progressLabelText = '0/0'
 let resetLoopCount = 0
-let moneyReward, repReward
+let moneyReward, repReward // filled in by the infiltrator service when it starts, and later populated here
 
 const failLimit = 3
 
@@ -50,6 +57,11 @@ const canInfiltrateFor = {
   'Netburners': true, 'Tian Di Hui': true, 'CyberSec': true,
   // special
   'Bladeburners': false, 'Church of the Machine God': false, 'Shadows of Anarchy': false
+}
+
+async function sleep (ms) {
+  // sleep function that's not affected by time shenanigans (e.g. infiltrator)
+  return new Promise(resolve => (win._setTimeout ?? win.setTimeout)(resolve, ms))
 }
 
 export function autocomplete (data) {
@@ -94,28 +106,11 @@ export async function main (ns) {
     }
 
     if (target === '$') {
-      chain.add(LoopAction.sell().setGoal(Number(value)))
+      chain.add(LoopAction.sell().setGoal(value))
     }
     else {
-      // TODO: do these substitutions later
-      if (value.toLowerCase() === 'max') {
-        // check the augs offered by the faction and choose the one with the highest rep cost that we don't already own
-        const highestRep = await getMaxAugRep(target)
-        if (highestRep === 0) {
-          log(_ns, `WARNING: Could not find any unowned augs offered by ${target}. Setting target rep to zero.`, true)
-          value = 0
-        } else {
-          value = highestRep
-          log(_ns, `Setting goal to max rep aug with ${target}: ${formatNumberShort(value)}`)
-        }
-      }
-      else if (value.toLowerCase() === 'donate') {
-        // set to the value required to unlock donations with the faction
-        const favorToDonate = await getNsDataThroughFile(ns, 'ns.getFavorToDonate()')
-        const repToFavor = (rep) => Math.ceil(25500 * 1.02 ** (rep - 1) - 25000);
-        value = repToFavor(favorToDonate)
-      }
-      chain.add(LoopAction.trade(target).setGoal(Number(value)))
+      // value must be one of: a number, 'max', or 'donate'. the strings will be evaluated later.
+      chain.add(LoopAction.trade(target).setGoal(value))
     }
   }
   if (goals.length === 0) {
@@ -130,7 +125,15 @@ export async function main (ns) {
   }
 }
 
-async function getMaxAugRep (faction) {
+async function evaluateDonate () {
+  const favorToDonate = await getNsDataThroughFile(_ns, 'ns.getFavorToDonate()')
+  const repToFavor = (rep) => Math.ceil(25500 * 1.02 ** (rep - 1) - 25000);
+  const value = repToFavor(favorToDonate)
+  log(_ns, `Setting goal to donate to ${target}: ${formatNumberShort(value)}`)
+  return value
+}
+
+async function evaluateMax (faction) {
   // this is a complicated one. highest-rep aug must be:
   // - offered by the faction
   // - not owned by the player
@@ -170,11 +173,18 @@ async function getMaxAugRep (faction) {
     }
     if (!betterOption) highestRep = rep
   }
+  if (highestRep === 0) {
+    log(_ns, `WARNING: Could not find any unowned augs offered by ${faction}. Setting target rep to zero.`, true)
+  } else {
+    log(_ns, `Setting goal to max rep aug with ${faction}: ${formatNumberShort(highestRep)}`)
+  }
   return highestRep
 }
 
 function addControls (onclick) {
   const styles = doc.createElement('style')
+  // need to re-add controls if they already exist, because the old ones are out of scope
+  if (doc.getElementById('infiltration-loop-controls')) removeControls()
   styles.textContent = `
     .infil-controls {
       font-family: 'Consolas', monospace;
@@ -274,9 +284,47 @@ export class LoopAction {
     this.goal = goal
   }
   setGoal (goal) {
-    if (typeof goal !== 'number') throw new Error('Invalid goal')
-    this.goal = goal
+    // if it ends with x (but not max), multiply by the appropriate reward
+    if (goal?.toLowerCase().endsWith('x') && goal !== 'max') {
+      if (this.type === 'sell') {
+        const multiplier = parseShortNumber(goal.slice(0, -1))
+        log(_ns, `Setting goal to sell for ${multiplier}× money reward: ${formatMoney(moneyReward * multiplier)}`)
+        this.goal = Math.floor(moneyReward * multiplier)
+        return this
+      }
+      else if (this.type === 'trade') {
+        const multiplier = parseShortNumber(goal.slice(0, -1))
+        log(_ns, `Setting goal to trade for ${multiplier}× rep reward: ${formatNumberShort(repReward * multiplier)}`)
+        this.goal = Math.floor(repReward * multiplier)
+        return this
+      }
+    }
+    // otherwise, parse it as a number
+    const parsed = parseShortNumber(goal)
+    if (isNaN(parsed)) {
+      // if it's not a number, it must be 'max' or 'donate', and it must be a trade action
+      if (this.type === 'sell') {
+        throw new Error('Goal must be a number for a sell action')
+      }
+      if (goal !== 'max' && goal !== 'donate') {
+        throw new Error('Goal must be a number, "max", or "donate" for a trade action')
+      }
+      this.goal = goal // just store the string for now
+    } else {
+      this.goal = parsed
+    }
     return this // allow chaining
+  }
+  async evaluateGoal () {
+    // replace this.goal with the actual value.
+    // don't call this until we're actually working on this action, or values may not be up to date.
+    // (specifically, 'max' goals may evaluate differently depending on other factions' rep)
+    if (this.goal === 'max') {
+      this.goal = await evaluateMax(this.target)
+    }
+    else if (this.goal === 'donate') {
+      this.goal = await evaluateDonate()
+    }
   }
   static sell () {
     return new LoopAction('sell')
@@ -317,10 +365,13 @@ async function checkGoal (action, loopCount) {
     } else {
       log(_ns, `Current money: ${formatMoney(player.money)}. Goal: ${formatMoney(action.goal)}.`)
       targetLabelText = `(${resetLoopCount}) Selling for cash`
-      progressLabelText = `${formatMoney(player.money)} / ${formatMoney(action.goal)}`
+      const loopsUntilFinished = Math.ceil((action.goal - player.money) / moneyReward)
+      progressLabelText = `${formatMoney(player.money)} / ${formatMoney(action.goal)} [${loopsUntilFinished}]`
     }
   }
   else if (action.type === 'trade') {
+    await action.evaluateGoal() // replace action.goal with the actual value, if necessary
+
     // ensure that the faction is valid (it's enough to check if it's just a key of canInfiltrateFor)
     if (!canInfiltrateFor[action.target]) {
       log(_ns, `ERROR: Invalid faction selected: ${action.target}.`, true)
@@ -333,7 +384,7 @@ async function checkGoal (action, loopCount) {
     } else {
       log(_ns, `Current rep with ${action.target}: ${formatNumberShort(currentRep)}. Goal: ${formatNumberShort(action.goal)}.`)
       targetLabelText = `(${resetLoopCount}) ${action.target}`
-      progressLabelText = `${formatNumberShort(currentRep)} / ${formatNumberShort(action.goal)}`
+      progressLabelText = `${formatNumberShort(currentRep)} / ${formatNumberShort(action.goal)} [${Math.ceil((action.goal - currentRep) / repReward)}]`
     }
   }
   else if (action.type === 'manual') {
@@ -344,6 +395,10 @@ async function checkGoal (action, loopCount) {
       log(_ns, `Starting loop ${loopCount + 1} of ${action.goal <= 0 ? 'infinite' : action.goal}.`)
       targetLabelText = `(${resetLoopCount}) Manual infiltration mode}`
       progressLabelText = `${loopCount + 1}/${action.goal <= 0 ? '∞' : action.goal}`
+      if (action.goal > 0) {
+        // show the number of loops remaining
+        progressLabelText += ` [${action.goal - loopCount}]`
+      }
     }
   }
   return false
@@ -363,8 +418,8 @@ async function nextUnmetGoal (iterator, loopCount) {
 
 export async function infiltrateLoop (actionChain, reloadInterval = 0) {
 
+  await sleep(1000) // wait a moment in case the rewards file hasn't been written yet
   let loopCount = 0 // used for manual mode
-  await _ns.asleep(100) // wait a moment in case the loop count file is still being written
   resetLoopCount = Number(await _ns.read(loopCountFile)) // used for reloading; parses to 0 if file doesn't exist, so that's fine
   let actions = actionChain.iterator()
   let iteration = await nextUnmetGoal(actions, loopCount)
@@ -379,14 +434,14 @@ export async function infiltrateLoop (actionChain, reloadInterval = 0) {
           const rewards = JSON.parse(contents)
           moneyReward = rewards.moneyGain
           repReward = rewards.repGain
-          log(_ns, `Money reward: ${formatMoney(moneyReward)}. Rep reward: ${formatNumberShort(repReward)}.`)
+          // log(_ns, `Money reward: ${formatMoney(moneyReward)}. Rep reward: ${formatNumberShort(repReward)}.`)
         }
         // otherwise, just assume it hasn't been written yet.
-        // if infiltrate-service.js fails to write the file, something has gone very wrong, so don't worry about it here.
+        // if infiltrator-service.js fails to write the file, something has gone very wrong, so don't worry about it here.
       }
       // check if we've reached the end of the chain
       if (iteration.done) {
-        log(_ns, 'All actions completed successfully.')
+        log(_ns, 'SUCCESS: All infiltration actions completed.', true, 'success')
         break
       }
       const currentAction = iteration.value
@@ -397,7 +452,7 @@ export async function infiltrateLoop (actionChain, reloadInterval = 0) {
         log(_ns, `Current action: Trade to ${currentAction.target} until you have ${formatNumberShort(currentAction.goal)} rep.`)
       }
       
-      let player = await getNsDataThroughFile(_ns, 'ns.getPlayer()')
+      const player = await getNsDataThroughFile(_ns, 'ns.getPlayer()')
       const validFactions = player.factions.filter(f => canInfiltrateFor[f])
       // ensure that the selected faction, if any, is valid
       if (currentAction.type === 'trade' && !validFactions.includes(currentAction.target)) {
@@ -473,7 +528,7 @@ export async function infiltrateOnce (action) {
         log(_ns, 'ERROR: Could not find ECorp in Aevum.')
         return 'fail'
       }
-      await _ns.asleep(0)
+      await sleep(0)
       getEcorp().click()
       clickTrusted(queryFilter('button', 'Infil'))
       log(_ns, `${consecutiveFails > 0 ? 'Res' : 'S'}tarted loop.`)
@@ -482,7 +537,7 @@ export async function infiltrateOnce (action) {
       // wait for the infiltration to complete
       let fail = false
       while (!infiltrationComplete()) {
-        await _ns.asleep(1000)
+        await sleep(300)
         cancelHook()
         if (getEcorp()) {
           // booted to city! assume this means the infiltration failed
@@ -508,7 +563,7 @@ export async function infiltrateOnce (action) {
         if (inputNode) {
           inputNode[Object.keys(inputNode)[1]].onChange({ target: { value: action.target } })
           // give it a moment to update
-          await _ns.asleep(100)
+          await sleep(100)
           // check that the value was set correctly
           if (inputNode.value === action.target) {
             // click trade button
@@ -544,7 +599,7 @@ export async function infiltrateOnce (action) {
       // wait for the user to make a choice on selling intel
       log(_ns, 'Waiting for user to sell intel...')
       while (queryFilter('h4', 'Infiltration successful!') !== undefined) {
-        await _ns.asleep(1000)
+        await sleep(1000)
       }
       // the user probably clicked one of the options if we're out of that loop, so assume success
       return 'success'
@@ -569,13 +624,19 @@ async function saveAndReload () {
   if (!save()) return
   // reset the loop count
   await _ns.write(loopCountFile, '0', 'w')
-  await _ns.asleep(10)
+  await sleep(100)
   location.reload()
-  await _ns.asleep(10e3) // page should reload sometime in this interval
+  await sleep(10e3) // page should reload sometime in this interval
 }
 
 function queryFilter (query, filter) {
   return [...doc.querySelectorAll(query)].find(e => e.innerText.trim().match(filter))
+}
+
+function selectBestTarget (city, canTravel = true, repOrMoneyNeeded = null) {
+  // returns the best target for the given city, based on what the player needs and whether they can travel
+  // if repOrMoneyNeeded is specified, the target must provide at least that much rep or money
+  // if not, the highest-reward target is chosen
 }
 
 function ensureAevum () {
